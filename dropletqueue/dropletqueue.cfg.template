@@ -1,0 +1,8 @@
+[main]
+log_file=/Users/bmuita/workspace/swiftcore/dropletqueue/logs/dropletqueue.log
+out_file=/Users/bmuita/workspace/swiftcore/dropletqueue/logs/dropletqueue.out
+pid_file=/tmp/dropletqueue.pid
+num_workers=10
+log_level=DEBUG
+api_url=http://swiftweb.local/api/droplet?api_key=abracadabra
+mq_host=localhost

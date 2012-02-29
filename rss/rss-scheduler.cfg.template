@@ -1,0 +1,15 @@
+[main]
+log_file=/Users/bmuita/workspace/swiftcore/rss/logs/rss-scheduler.log
+out_file=/Users/bmuita/workspace/swiftcore/rss/logs/rss-scheduler.out
+pid_file=/tmp/rss-scheduler.pid
+num_response_workers=10
+num_channel_update_workers=10
+log_level=DEBUG
+mq_host=localhost
+
+[db]
+host=localhost
+port=3306
+user=root
+pass=
+database=swiftweb
