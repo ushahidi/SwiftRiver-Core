@@ -66,7 +66,7 @@ class LinkExtractorQueue(Thread):
         pattern = r"(?i)\b((?:https?://|www\d{0,3}[.]|[a-z0-9.\-]+[.][a-z]{2,4}/)(?:[^\s()<>]+|\(([^\s()<>]+|(\([^\s()<>]+\)))*\))+(?:\(([^\s()<>]+|(\([^\s()<>]+\)))*\)|[^\s`!()\[\]{};:'\".,<>?«»“”‘’]))"
         
         # Strip tags leaving only hyperlinks
-        droplet_raw = re.sub(r'<(?!\s*a\s*)[^>]*?>', '', droplet['droplet_raw']).strip().encode('ascii', 'ignore')
+        droplet_raw = re.sub(r'<(?!\s*[aA]\s*)[^>]*?>', '', droplet['droplet_raw']).strip().encode('ascii', 'ignore')
         
         for url in re.findall(pattern, droplet_raw):
             if not droplet.has_key('links'):

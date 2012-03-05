@@ -18,6 +18,7 @@ import ConfigParser
 from daemon import Daemon
 from threading import Thread, Event
 from httplib2 import Http
+from httplib import BadStatusLine
 from os.path import realpath, dirname
 
 class DropletQueue(Thread):
@@ -74,6 +75,9 @@ class DropletQueue(Thread):
                     time.sleep(60)
             except socket.error, msg:
                 log.error("%s Error communicating with api(%s). Retrying" % (self.name, msg))
+                time.sleep(60) #Retry after 60 seconds
+            except BadStatusLine, e:
+                log.error("%s BadStatusLine Error communicating with api(%s). Retrying" % (self.name, e))
                 time.sleep(60) #Retry after 60 seconds
             
         if content:
