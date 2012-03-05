@@ -1,5 +1,5 @@
 SwiftCore Link Extractor
-==================================
+========================
 
 Droplet post processor that scans a droplet's content for links and adds them as links metadata.
 

@@ -3,7 +3,7 @@ SwiftCore RSS
 RSS content fetch scheduler and workers.
 
 System Requirements
-====================
+===================
 
  * Python 2.6+
 

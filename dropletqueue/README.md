@@ -1,5 +1,5 @@
 SwiftCore Droplet Queue Processor
-==================================
+=================================
 
 Adds droplets into SwiftRiver by posting droplets on the droplet queue to the /api/droplet
 endpoint on the SwiftRiver web application.

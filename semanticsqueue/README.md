@@ -1,5 +1,5 @@
 SwiftCore Semantic Queue Processor
-===================================
+==================================
 
 Posts new droplets to the Semantics API and places the droplets updated with tags back onto
 the droplet queue for updating.
