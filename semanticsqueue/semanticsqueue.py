@@ -11,58 +11,23 @@ import sys, time
 import ConfigParser
 import socket
 import logging as log
-import MySQLdb
 import pika
 import json, re
 from httplib2 import Http
 from urllib import urlencode
-from daemon import Daemon
-from threading import Thread, Event
+from threading import Event
 from os.path import dirname, realpath
+from swiftriver import Worker, Daemon
 
-class SemanticsQueue(Thread):
+class SemanticsQueueWorker(Worker):
     
-    SEMANTICS_QUEUE = 'SEMANTICS_QUEUE'
-    DROPLET_QUEUE = 'DROPLET_QUEUE'
-    
-    def __init__(self, name, mq_host, api_url, event):
-        Thread.__init__(self)
-        self.daemon = True
-        self.name = name
-        self.event = event
-        self.api_url = api_url
-        self.mq_host = mq_host
+    def __init__(self, name, mq_host, queue, **options):
+        super(Worker, self).__init__(name, mq_host, queue, options)
         self.start()
     
-    def run(self):
-        """Register our handler for fetcher responses"""
-        log.info("Registering droplet handler %s" % self.name)
-        
-        # Start a persisitent connection to the api end point
-        self.h = Http()
-        
-        # Connect to the MQ, retry on failure
-        while True:
-            try:
-                self.mq = pika.BlockingConnection(pika.ConnectionParameters(
-                        host=self.mq_host))
-                semantics_channel = self.mq.channel()
-                semantics_channel.exchange_declare(exchange='metadata', type='fanout', durable=True)        
-                semantics_channel.queue_declare(queue=self.SEMANTICS_QUEUE, durable=True)
-                semantics_channel.queue_bind(exchange='metadata',queue=self.SEMANTICS_QUEUE)
-                semantics_channel.basic_qos(prefetch_count=1)
-                semantics_channel.basic_consume(self.handle_droplet,
-                                      queue=self.SEMANTICS_QUEUE)            
-                semantics_channel.start_consuming()
-            except socket.error, msg:
-                log.error("%s error connecting to the MQ, retrying" % (self.name))
-                time.sleep(60)
-            except pika.exceptions.AMQPConnectionError, e:
-                log.error("%s lost connection to the MQ, reconnecting" % (self.name))
-                time.sleep(60)
-    
-    def handle_droplet(self, ch, method, properties, body):
+    def handle_mq_response(self, ch, method, properties, body):
         """POSTs the droplet to the semantics API"""
+        
         droplet = json.loads(body)
         log.info(" %s droplet received with id %d" % (self.name, droplet.get('id', 0)))
         droplet_raw = re.sub(r'<[^>]*?>', '', droplet['droplet_raw']).strip().encode('utf-8', 'ignore')
@@ -76,9 +41,12 @@ class SemanticsQueue(Thread):
         headers = {'Content-type': 'application/x-www-form-urlencoded'}
         
         resp = content = None
+        h = Http()
+        api_url = self.options.get('api_url')
+        
         while not resp:
             try:
-                resp, content = self.h.request(self.api_url, 'POST', body=urlencode(post_data), headers=headers)
+                resp, content = h.request(api_url, 'POST', body=urlencode(post_data), headers=headers)
                 
                 # If no OK response, keep retrying
                 if resp.status != 200:
@@ -146,14 +114,24 @@ class SemanticsQueueDaemon(Daemon):
     
     def run(self):
         event = Event()
-        for x in range(self.num_workers): SemanticsQueue("semanticsqueue-worker-" + str(x), self.mq_host, self.api_url, event)
+        
+        # Parameters to be passed on to the queue worker
+        queue_name = 'SEMANTICS_QUEUE'
+        options = {'api_url':self.api_url, 
+                   'exchange_name': 'metadata', 
+                   'exchange_type':'fanout'
+        }
+        
+        for x in range(self.num_workers):
+            SemanticsQueueWorker("semanticsqueue-worker-" + str(x), self.mq_host, queue_name, options)
+            
         log.info("Workers started");
         event.wait()
         log.info("Exiting");
             
 if __name__ == "__main__":
     config = ConfigParser.SafeConfigParser()
-    config.readfp(open(dirname(realpath(__file__))+'/semanticsqueue.cfg'))
+    config.readfp(open(dirname(realpath(__file__))+'/config/semanticsqueue.cfg'))
     
     try:
         log_file = config.get("main", 'log_file')
