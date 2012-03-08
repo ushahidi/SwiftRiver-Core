@@ -70,8 +70,25 @@ class LinkExtractorQueue(Thread):
             
         log.info(" %s droplet received with id %d" % (self.name, droplet.get('id', 0)))
         
-		# Credit to http://daringfireball.net/2010/07/improved_regex_for_matching_urls
-        pattern = r"(?i)\b((?:https?://|www\d{0,3}[.]|[a-z0-9.\-]+[.][a-z]{2,4}/)(?:[^\s()<>]+|\(([^\s()<>]+|(\([^\s()<>]+\)))*\))+(?:\(([^\s()<>]+|(\([^\s()<>]+\)))*\)|[^\s`!()\[\]{};:'\".,<>?«»“”‘’]))"
+        # Credit to https://gist.github.com/729294
+        pattern = "(?:(?:https?|ftp)://)"
+        pattern += "(?:\\S+(?::\\S*)?@)?"
+        pattern += "(?:"
+        pattern += "(?!10(?:\\.\\d{1,3}){3})"
+        pattern += "(?!127(?:\\.\\d{1,3}){3})"
+        pattern += "(?!169\\.254(?:\\.\\d{1,3}){2})"
+        pattern += "(?!192\\.168(?:\\.\\d{1,3}){2})"
+        pattern += "(?!172\\.(?:1[6-9]|2\\d|3[0-1])(?:\\.\\d{1,3}){2})"
+        pattern += "(?:[1-9]\\d?|1\\d\\d|2[01]\\d|22[0-3])"
+        pattern += "(?:\\.(?:1?\\d{1,2}|2[0-4]\\d|25[0-5])){2}"
+        pattern += "(?:\\.(?:[1-9]\\d?|1\\d\\d|2[0-4]\\d|25[0-4]))"
+        pattern += "|"
+        pattern += "(?:(?:[a-z\\u00a1-\\uffff0-9]+-?)*[a-z\\u00a1-\\uffff0-9]+)"
+        pattern += "(?:\\.(?:[a-z\\u00a1-\\uffff0-9]+-?)*[a-z\\u00a1-\\uffff0-9]+)*"
+        pattern += "(?:\\.(?:[a-z\\u00a1-\\uffff]{2,}))"
+        pattern += ")"
+        pattern += "(?::\\d{2,5})?"
+        pattern += "(?:/[^\\s]*)?"
         
         # Strip tags leaving only hyperlinks
         droplet_raw = re.sub(r'<(?!\s*[aA]\s*)[^>]*?>', '', droplet['droplet_raw']).strip().encode('ascii', 'ignore')
