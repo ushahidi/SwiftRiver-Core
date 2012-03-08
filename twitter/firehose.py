@@ -1,4 +1,5 @@
 import ConfigParser
+import itertools
 import json
 import logging as log
 import pika
@@ -8,9 +9,60 @@ import utils
 from multiprocessing import Pool
 from os.path import dirname, realpath
 from swiftriver import Daemon, Worker
-from threading import Event
+from threading import Thread, Event
 from tweepy import OAuthHandler, Stream, StreamListener
 
+
+
+def predicate_match(L):
+    # Look for space delimited strings
+    search_pattern = L[0].split(" ")
+#    log.debug("\nPattern: %s\n String: %s" % (L[0], L[2]))
+        
+    if len(search_pattern) == 1:
+        return [] if re.search(L[0], L[2], re.IGNORECASE) is None else L[1]
+    elif len(search_pattern) > 1:
+        # Returns the river ids if each element in the pattern is 
+        # in the search string
+        
+        found = False
+        
+        for pattern in search_pattern:
+            found = (False if re.search(pattern, L[2], re.IGNORECASE) 
+                     is None else True)
+        
+        return L[1] if found else []
+                
+
+class FilterPredicateMatchWorker(Thread):
+    
+    def __init__(self, channel, predicates, drop_dict):
+        Thread.__init__(self)
+        self.channel = channel
+        self.predicates = []
+        search_string = drop_dict['droplet_content']
+        for t in predicates:
+            item = list(t)
+            item.append(search_string)
+            self.predicates.append(tuple(item))
+        
+        self.drop_dict = drop_dict
+        
+    def run(self):
+        # Map reduce
+        pool = Pool(processes=5)
+        river_ids = pool.map(predicate_match, self.predicates)
+        
+        # Flatten the river ids into a set
+        river_ids = list(itertools.chain(*river_ids))
+        if len(river_ids) > 0:
+            self.drop_dict['river_id'] = list(river_ids)
+            self.channel.queue_declare(queue=Worker.DROPLET_QUEUE, durable=True)
+            self.channel.basic_publish(exchange='', 
+                                       routing_key=Worker.DROPLET_QUEUE,
+                                       properties=pika.BasicProperties(delivery_mode=2),
+                                       body=json.dumps(self.drop_dict))
+        
 
 class TwitterFirehoseWorker(Worker):
     
@@ -84,38 +136,7 @@ class TwitterFirehoseWorker(Worker):
         
         #Acknowledge delivery
         ch.basic_ack(delivery_tag = method.delivery_tag)
-    
-    def map_droplet_to_rivers(self, drop_dict):
-        """
-        Maps a tweet that has already been packed into a droplet to
-        the rivers stored under each of the filter predicates - a la MapReduce
         
-        During the mapping, a river_id field is created in the droplet dict 
-        """ 
-
-        search_string = drop_dict['droplet_content']
-        
-        # Closure to do the regexp
-        def predicate_match(L):
-            if re.search(L[0], search_string, re.IGNORECASE) is None:
-                return []
-            else:
-                return L[1]
-            
-        # Build a pool of 8 processes    
-        pool = Pool(processes=8)
-        
-        # Generate a list of rivers ids that match the current droplet
-        river_ids = pool.map(predicate_match, self.predicates)
-        
-        log.debug("Matched river ids %r" % river_ids)
-        
-        if len(river_ids) > 0:
-            drop_dict['river_id'] = river_ids
-            return True
-        
-        return False
-    
 
 class FirehoseStreamListener(StreamListener):
     
@@ -128,22 +149,9 @@ class FirehoseStreamListener(StreamListener):
     def on_data(self, data):
        """Called when raw data is received from the connection"""
        
-       payload = json.loads(data)
-       
-       if not isinstance(payload, dict):
-           log.info('ERROR: Received data %s' %payload)
-           pass
-       
-       if data.has_key('in_reply_to_status_id'):
-           pass
-       elif data.has_key('delete'):
-           status = payload['delete']['status']
-           status_id, user_id = status['id_str'], status['user_id_str']
-           self.on_delete(status_id, user_id)
-       elif 'limit' in data:
-           self.on_limit(payload['limit']['track'])
-       else:
-           # Build the drop
+       if 'in_reply_to_status_id' in data:
+           payload = json.loads(data)
+           
            drop_dict = {
                         'channel': 'twitter',
                         'identity_orig_id': payload['user']['id_str'],
@@ -158,16 +166,22 @@ class FirehoseStreamListener(StreamListener):
                         'droplet_date_pub': payload['created_at']
                         }
            
-           # Match the tweet against all the filter predicates in a MapReduce fashion
-           if self.firehose_worker.map_droplet_to_rivers(drop_dict):
-               # Submit droplet for metadata extraction
-               log.info("Submitting tweet %s to the droplet queue" % drop_dict['identity_orig_id'])
-               pass
-#               self.channel.queue_declare(queue=Worker.DROPLET_QUEUE, durable=True)
-#               self.channel.basic_publish(exchange='', 
-#                                          routing_key=Worker.DROPLET_QUEUE,
-#                                          properties=pika.BasicProperties(delivery_mode=2),
-#                                          body=json.dumps(drop_dict))
+#           log.debug("Droplet to be mapped %r" %drop_dict)
+           
+           # Spawn a predicate match worker
+           FilterPredicateMatchWorker(self.channel, 
+                                      self.firehose_worker.predicates, drop_dict).start()
+           
+
+       elif 'delete' in data:
+           status = json.loads(data)['delete']['status']
+           status_id, user_id = status['id_str'], status['user_id_str']
+           self.on_delete(status_id, user_id)
+       elif 'limit' in data:
+           track = json.loads(data)['limit']['track']
+           self.on_limit(track)
+       else:
+           log.info("Out of sequence API response %s" % data)
        
     
     def on_status(self, status):
