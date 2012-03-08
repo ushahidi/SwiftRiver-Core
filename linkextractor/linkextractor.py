@@ -93,10 +93,9 @@ class LinkExtractorQueue(Thread):
         # Strip tags leaving only hyperlinks
         droplet_raw = re.sub(r'<(?!\s*[aA]\s*)[^>]*?>', '', droplet['droplet_raw']).strip().encode('ascii', 'ignore')
         
-        for url in re.findall(pattern, droplet_raw):
+        for link in re.findall(pattern, droplet_raw):
             if not droplet.has_key('links'):
                 droplet['links'] = []
-            link = url[0]
 
             if link[:4] != 'http':
                 link = 'http://' + link
