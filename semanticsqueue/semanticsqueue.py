@@ -21,7 +21,7 @@ from swiftriver import Worker, Daemon
 
 class SemanticsQueueWorker(Worker):
     
-    def __init__(self, name, mq_host, queue, **options):
+    def __init__(self, name, mq_host, queue, options=None):
         super(Worker, self).__init__(name, mq_host, queue, options)
         self.start()
     

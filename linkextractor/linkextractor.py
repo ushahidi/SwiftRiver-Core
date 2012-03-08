@@ -20,8 +20,8 @@ from swiftriver import Daemon, Worker
 
 class LinkExtractorQueueWorker(Worker):
     
-    def __init__(self, name, mq_host, queue, **options):
-        super(Worker, self).__init__(name, mq_host,  queue, options)
+    def __init__(self, name, mq_host, queue, options=None):
+        Worker.__init__(self, name, mq_host,  queue, options)
         self.start()
 
     

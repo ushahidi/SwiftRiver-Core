@@ -39,7 +39,7 @@ class RssFetchScheduler:
         self.lock = RLock()
         
     def get_cursor(self):
-        """Get a db conneciton and attempt reconnection"""
+        """Get a db connection and attempt reconnection"""
         cursor = None
         while not cursor:
             try:        
@@ -156,7 +156,7 @@ class RssFetchScheduler:
         
     def run_scheduler(self):
         """
-        Submits URLs to the MQ that were last fetched more than MAX_FETCH_INTERVAL aga
+        Submits URLs to the MQ that were last fetched more than MAX_FETCH_INTERVAL
         and marks them as submitted
         """
         while True:
@@ -286,11 +286,11 @@ class RssFetchScheduler:
         # Start a pool of threads to handle responses from 
         # fetchers and update rss_urls 
         fetch_queue = 'RSS_FETCH_RESPONSE'
-        options = {'scheduler': self}
+        options = {'scheduler': self, 'durable_queue': False}
         
         for x in range(self.num_response_workers):
             FetcherResponseHandler("response-handler-" + str(x), self.mq_host, 
-                                   fetch_queue, options)
+                                   fetch_queue, options).start()
         
         # Start a pool to handle new/removed channel options from the web front end / wherever
         update_queue = 'RSS_UPDATE_QUEUE'
@@ -299,21 +299,24 @@ class RssFetchScheduler:
         options['exchange_name'] = 'chatter'
         options['exchange_type'] = 'topic'
         options['routing_key'] = 'web.channel_option.rss.*';
+        options['durable_exchange'] = True
         
         for x in range(self.num_channel_update_workers):
-            ChannelUpdateHandler("channel-handler-" + str(x), self.mq_host, update_queue, options)        
+            ChannelUpdateHandler("channel-handler-" + str(x), self.mq_host, 
+                                 update_queue, options).start()        
         
         Thread(target=self.run_scheduler).start()
 
         
 class FetcherResponseHandler(Worker):
-    """Worker thread responsible for fetching articles and putting 
-    them on the droplet queue"""
+    """
+    Worker thread responsible for fetching articles and putting 
+    them on the droplet queue
+    """
     
-    def __init__(self, name, mq_host, queue, **options):
-        super(Worker, self).__init__(name, mq_host, queue, options)
+    def __init__(self, name, mq_host, queue, options=None):
+        Worker.__init__(self, name, mq_host, queue, options)
         self.scheduler = options.get('scheduler')
-        self.start()
     
     def handle_mq_response(self, ch, method, properties, body):
         """Update rss_url status from fetcher response"""
@@ -330,13 +333,12 @@ class FetcherResponseHandler(Worker):
 
  
 class ChannelUpdateHandler(Worker):
-    """Thread responsisble for waiting for new/deleted channel options 
+    """Thread responsible for waiting for new/deleted channel options 
     from the web front end application"""
     
-    def __init__(self, name, mq_host, queue, **options):
-        super(Worker, self).__init__(name, mq_host, queue, options)
+    def __init__(self, name, mq_host, queue, options=None):
+        Worker.__init__(self, name, mq_host, queue, options)
         self.scheduler = self.options.get('scheduler')
-        self.start()
 
     def handle_mq_response(self, ch, method, properties, body):
         """Fetch a newly added channel option"""
@@ -375,6 +377,7 @@ class RssFetchSchedulerDaemon(Daemon):
                               self.mq_host, self.db_config).start()
         finally:
             log.info("Exiting");
+
             
 if __name__ == "__main__":
     config = ConfigParser.SafeConfigParser()

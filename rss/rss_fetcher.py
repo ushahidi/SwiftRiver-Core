@@ -30,8 +30,8 @@ class RssFetcherWorker(Worker):
     SHEDULER_RESPONSE_QUEUE = 'RSS_FETCH_RESPONSE'
     
     """Thread executing tasks from a given queue"""
-    def __init__(self, name, mq_host, queue, **options):
-        super(Worker, self).__init__(name, mq_host, queue, options)
+    def __init__(self, name, mq_host, queue, options=None):
+        Worker.__init__(self, name, mq_host, queue, options)
 
 
     def handle_mq_response(self, ch, method, properties, body):
@@ -81,31 +81,40 @@ class RssFetcherWorker(Worker):
             else:
                 d = feedparser.parse(message['url'])
              
+            # Get the avatar, locale and identity name
+            avatar = d.feed.image.get('href', None) if d.feed.has_key('image') else None
+            locale = d.feed.get('language', None)
+            identity_name = d.feed.get('title', message['url'])
+            
             for entry in d.entries:
                 if not message['last_fetch_etag'] and not message['last_fetch_modified']:
                     if time.mktime(entry.get('date_parsed', time.gmtime())) < int(message['last_fetch_time']):
                         continue
-                drop = {}
-                drop['channel'] = 'rss'
-                drop['river_id'] = message['river_ids']
-                drop['identity_orig_id'] = message['url']
-                drop['identity_username'] = d.feed.get('link', message['url'])
-                drop['identity_name'] = d.feed.get('title', message['url'])
-                drop['identity_avatar'] = d.feed.image.get('href', None) if d.feed.has_key('image') else None
-                drop['droplet_orig_id'] = entry.get('link', None)
-                drop['droplet_type'] = 'original';
-                drop['droplet_title'] = entry.get('title', None)
+                
+                content = None
                 if entry.has_key('content'):
-                    drop['droplet_content'] = entry.content[0].value
+                    content = entry.content[0].value
                 elif entry.has_key('summary'):
                     # Publisher probably misbehaving and put content in the summary
-                    drop['droplet_content'] = entry.summary
-                else:
-                    # Droplet has no content
-                    drop['droplet_content'] = None
-                drop['droplet_locale'] = d.feed.get('language', None)
-                drop['droplet_date_pub'] = time.strftime('%Y-%m-%d %H:%M:%S', 
+                    content = entry.summary
+                
+                # Build out the drop    
+                drop = {
+                        'channel': 'rss',
+                        'river_id': message['river_ids'],
+                        'identity_orig_id': message['url'],
+                        'identity_username' : d.feed.get('link', message['url']),
+                        'identity_name': identity_name,
+                        'identity_avatar': avatar,
+                        'droplet_orig_id' : entry.get('link', None),
+                        'droplet_type': 'original',
+                        'droplet_title': entry.get('title', None),
+                        'droplet_content': content,
+                        'droplet_locale': locale,
+                        'droplet_date_pub': time.strftime('%Y-%m-%d %H:%M:%S', 
                                                          entry.get('date_parsed', time.gmtime()))
+                        }
+
                 #log.debug("Drop: %r" % drop)
                 drops.append((message['url'], time.mktime(entry.get('date_parsed', 
                                                                     time.gmtime())), pickle.dumps(drop)))

@@ -22,13 +22,14 @@ from swiftriver import Worker, Daemon
 
 class DropletQueueWorker(Worker):
     
-    def __init__(self, name, mq_host, queue, **options):
-        super(Worker, self).__init__(name, mq_host, queue, options)
+    def __init__(self, name, mq_host, queue, options=None):
+        Worker.__init__(self, name, mq_host, queue, options)
         self.start()
     
     
     def handle_mq_response(self, ch, method, properties, body):
         """POSTs the droplet to the droplet API"""
+        
         droplet = json.loads(body)
         log.info(" %s droplet received with id %d channel '%s'" 
                  % (self.name, droplet.get('id', 0), droplet.get('channel', '')))
@@ -74,19 +75,19 @@ class DropletQueueDaemon(Daemon):
     def __init__(self, num_workers, mq_host, api_url, pid_file, out_file):
         Daemon.__init__(self, pid_file, out_file, out_file, out_file)
         
-        self.num_workers = num_workers
-        self.api_url = api_url
-        self.mq_host = mq_host
+        self.__num_workers = num_workers
+        self.__api_url = api_url
+        self.__mq_host = mq_host
     
     def run(self):
         # Name of the queue
         queue_name = Worker.DROPLET_QUEUE
         
         # Options to be passed on to the worker thread
-        options = {"api_url": self.api_url}
+        options = {"api_url": self.__api_url}
         
-        for x in range(self.num_workers):
-            DropletQueueWorker("dropletqueue-worker-" + str(x), self.mq_host, 
+        for x in range(self.__num_workers):
+            DropletQueueWorker("dropletqueue-worker-" + str(x), self.__mq_host, 
                                queue_name, options)
         
         log.info("Workers started");

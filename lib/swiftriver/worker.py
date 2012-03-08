@@ -15,7 +15,7 @@ class Worker(Thread):
     
     DROPLET_QUEUE = 'DROPLET_QUEUE'
     
-    def __init__(self, name, mq_host, queue, **options):
+    def __init__(self, name, mq_host, queue, options=None):
         Thread.__init__(self)
         self.name = name
         self.mq_host = mq_host
@@ -29,10 +29,12 @@ class Worker(Thread):
         
         self.options = options
         
-        # Get the exchange name, type and routing key from the options
+        # AMQP channel options
         self.exchange_name = options.get('exchange_name')
         self.exchange_type = options.get('exchange_type', 'fanout')
         self.routing_key = options.get('routing_key', '')
+        self.durable_queue = options.get('durable_queue', False)
+        self.durable_exchange = options.get('durable_exchange', True)
            
     def run(self):
         """ Registers the handler that processes responses from the MQ"""
@@ -47,17 +49,17 @@ class Worker(Thread):
                                                   pika.reconnection_strategies.SimpleReconnectionStrategy())
                 
                 worker_channel = self.mq.channel()
-                worker_channel.queue_declare(queue=self.queue, durable=True)
-                worker_channel.basic_qos(prefetch=1)
+                worker_channel.queue_declare(queue=self.queue, durable=self.durable_queue)
+                worker_channel.basic_qos(prefetch_count=1)
                 
                 # Check for exchange name
                 if self.exchange_name:
                     
                     worker_channel.exchange_declare(exchange=self.exchange_name, 
                                                     type=self.exchange_type,
-                                                    durable=True)
+                                                    durable=self.durable_exchange)
                     
-                    worker_channel.queue_bind(exchage=self.exchange_name, 
+                    worker_channel.queue_bind(exchange=self.exchange_name, 
                                               queue=self.queue, 
                                               routing_key=self.routing_key)
                 
