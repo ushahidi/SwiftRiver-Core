@@ -65,32 +65,101 @@ class TwitterFirehoseManager:
         
         return cursor;
             
-    def add_channel_option(self, mq, channel_option):
-        """ Adds a predicate to the firehose """
-        payload = json.loads(channel_option)
+    def add_filter_predicate(self, mq, payload):
+        """ Adds a filter predicate to the firehose """
         
         # Acquire lock and proceed
         with self.__lock:
-            # Check if the channel option exists
-            predicate_type = payload['key']
-            predicate = payload['value']
-            if not self.__predicates.has_key(predicate_type):
-                self.__predicates[predicate_type] = {predicate: set()}
+            # Grab essential data
+            predicate_type = "follow" if payload['key'] == "person" else "track"
+            filter_predicate = payload['value']['value']
+            river_id = payload['river_id']
             
-            self.__predicates[predicate_type][predicate].add(payload['river_id'])
+            # Get the update target
+            update_target = (self.__predicates[predicate_type] 
+                             if self.__predicates.has_key(predicate_type) else {})
             
-            # Construct the message to sent out to the process consuming the firehose
-            message = json.dumps(self.__predicates)
+            # Make a copy of the update target, for getting the diff
+            current_target = update_target
+            self.__sanitize_filter_predicate(filter_predicate, update_target, river_id)
+            
+            # set-list conversion
+            for k, v in update_target.iteritems(): update_target[k] = list(v)
+
+            # Update internal list of predicates
+            self.__predicates[predicate_type] = update_target
+            
+            publish_data = {}
+            if len(current_target) == 0:
+                # Predicate type was non-existent before sanitization, 
+                # ignore diff compute
+                publish_data[predicate_type] = update_target
+            else:
+                # Predicate type existing prior to sanitization, compute diff
+                new_predicates = list(set(update_target.keys()) - 
+                                      set(current_target.keys()))
+
+                # Check for new predicates                
+                if len(new_predicates) > 0:
+                    publish_data[predicate_type] = {}
+                    k = map(lambda x: dict({x:[river_id]}), new_predicates)
+                    for v in k: publish_data[predicate_type].update(v)
+                elif len(new_predicates) == 0:
+                    # No new filter predicates, check for rivers update for each predicate
+                    publish_data[predicate_key] = {}
                     
-            # Announce the new predicate(channel option) on the firehose queue
-            channel = mq.channel()
-            channel.queue_declare(queue=utils.FIREHOSE_QUEUE, durable=False)
-            channel.basic_publish(exchange = '', routing_key=utils.FIREHOSE_QUEUE, body=message)
-    
+                    for k,v in update_target.iteritems():
+                        # Get the rivers associated with the current list of rivers
+                        g = current_target[k]
+                        rivers_diff = list(set(v) - set(g))
+                        if len(rivers_diff) > 0:
+                            publish_data[predicate_key].update({k: rivers_diff})
+                    
+                    # Verify that there's data to be published
+                    if len(publish_data[predicate_key]) == 0: publish_data = {}
+                
+            
+            # Check if there's any data to be published            
+            if len(publish_data) > 0:
+                # Construct the message to sent out to the process consuming the firehose
+                message = json.dumps(publish_data)
+                        
+                # Publish the new predicate to the Firehose
+                channel = mq.channel()
+                channel.queue_declare(queue=utils.FIREHOSE_QUEUE, durable=False)
+                channel.basic_publish(exchange = '', 
+                                      routing_key=utils.FIREHOSE_QUEUE,
+                                      body=message)
+
+
+    def __sanitize_filter_predicate(self, filter_predicate, update_target, river_id):
+        """Given a filter predicate, splits it, removes '#' and '@'
+        and pushes it to the specified target"""
+        
+        for term in filter_predicate.split(","):
+            term = term.strip();
+            
+            # As per the streaming API guidelines, terms should be 60 chars
+            # long at most
+            if  len(term) > 60:
+                continue
+            
+            # Remove '#' and '@' from the filter predicates
+            term = term[1:] if term[:1] == '@' else term
+            term = term[1:] if term[:1] == '#' else term
+            
+            if not update_target.has_key(term):
+                update_target[term] = set()
+                
+            # Store the river id with that item 
+            update_target[term].add(river_id)
+            
+            
     def remove_channel_option(self, channel_option):
         # Remove the predicate from the internal cache and from 
         # firehose predicates list
         pass
+
     
     def __get_firehose_predicates(self):
         """Gets all the twitter channel options and classifies them
@@ -111,28 +180,13 @@ class TwitterFirehoseManager:
             if not predicates.has_key(predicate_key):
                 predicates[predicate_key] = {}
             
-            # Get the search term
-            search_term = json.loads(value)['value']
+            update_target = predicates[predicate_key]
             
-            # Split the value string - takes care of where the search term is 
-            # a list of terms separated by commas 
-            for term in search_term.split(","):
-                term = term.strip()
-                
-                # As per the streaming API guidelines, terms should be 60 chars
-                # long at most
-                if  len(term) > 60:
-                    continue
-                
-                # Remove '#' and '@' from the filter predicates
-                term = term[1:] if term[:1] == '@' else term
-                term = term[1:] if term[:1] == '#' else term
-                
-                if not predicates[predicate_key].has_key(term):
-                    predicates[predicate_key][term] = set()
-                    
-                # Store the river id with that item 
-                predicates[predicate_key][term].add(river_id)
+            # Get filter predicate and submit it for sanitization 
+            filter_predicate = json.loads(value)['value']
+            self.__sanitize_filter_predicate(filter_predicate, update_target, river_id)
+            
+            predicates[predicate_key] = update_target
         
         c.close()
         
@@ -156,7 +210,7 @@ class TwitterFirehoseManager:
                     channel = connection.channel()
                     channel.queue_declare(queue=utils.FIREHOSE_QUEUE, durable=False)
                     channel.basic_publish(exchange='', 
-                                          routing_key=utils.FIREHOSE_QUEUE, 
+                                          routing_key=utils.FIREHOSE_QUEUE,
                                           body=message)
                     
                     self.__predicates_changed = False
@@ -184,9 +238,11 @@ class TwitterFirehoseManager:
             worker_name = "twitter-predicate-updater-" + str(x)
                 
             # Spawn the worker
-            TwitterPredicateUpdateWorker(worker_name, self.__mq_host, 
+            worker = TwitterPredicateUpdateWorker(worker_name, self.__mq_host, 
                                          utils.TWITTER_UPDATE_QUEUE, 
-                                         worker_options).start()
+                                         worker_options)
+            worker.set_firehose_manager(self)
+            worker.start()
             
         # Get all the predicates from the database
         self.__predicates = self.__get_firehose_predicates()
@@ -205,22 +261,22 @@ class TwitterPredicateUpdateWorker(Worker):
         
     def __init__(self, name, mq_host, queue, options=None):
         Worker.__init__(self, name, mq_host, queue, options)
+        self.__firehose_manager = None
     
+    def set_firehose_manager(self, manager):
+        """Sets the firehose manager reference"""
+        self.__firehose_manager = manager
+        
     def handle_mq_response(self, ch, method, properties, body):
         try:
-            payload = json.load(body)
-            
+            payload = json.loads(body)
             # Add predicates
             if method.routing_key == "web.channel_option.twitter.add":
                 log.info("Firehose filter predicate added %s" % payload['value'])
-                if payload['key'] == 'keyword':
-                    pass
-                
-                if payload['key'] == 'person':
-                    pass
+                self.__firehose_manager.add_filter_predicate(payload)
             
             # Delete predicates
-            if method.routing_key == "web.channel_option.twitter.add":
+            if method.routing_key == "web.channel_option.twitter.delete":
                 log.info("Firehose filter predicate removed %s" % payload['value'])
                 if payload['key'] == 'keyword':
                     # Delete keyword

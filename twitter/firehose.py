@@ -4,7 +4,10 @@ import json
 import logging as log
 import pika
 import re
+import rfc822
+import socket
 import sys
+import time
 import utils
 from multiprocessing import Pool
 from os.path import dirname, realpath
@@ -13,7 +16,12 @@ from threading import Thread, Event
 from tweepy import OAuthHandler, Stream, StreamListener
 
 
-
+"""
+Given a list T with tuples of the form (predicate, rivers, content), 
+returns the rivers if the predicate is found in the content.
+Where the predicate has spaces, it is split and each token matched
+against the content
+"""
 def predicate_match(L):
     # Look for space delimited strings
     search_pattern = L[0].split(" ")
@@ -34,12 +42,13 @@ def predicate_match(L):
         return L[1] if found else []
                 
 
-class FilterPredicateMatchWorker(Thread):
+class FilterPredicateMatchWorker():
+    """ Predicate matching thread"""
     
     def __init__(self, channel, predicates, drop_dict):
-        Thread.__init__(self)
         self.channel = channel
         self.predicates = []
+        
         search_string = drop_dict['droplet_content']
         for t in predicates:
             item = list(t)
@@ -56,15 +65,33 @@ class FilterPredicateMatchWorker(Thread):
         # Flatten the river ids into a set
         river_ids = list(itertools.chain(*river_ids))
         if len(river_ids) > 0:
-            self.drop_dict['river_id'] = list(river_ids)
-            self.channel.queue_declare(queue=Worker.DROPLET_QUEUE, durable=True)
-            self.channel.basic_publish(exchange='', 
-                                       routing_key=Worker.DROPLET_QUEUE,
-                                       properties=pika.BasicProperties(delivery_mode=2),
-                                       body=json.dumps(self.drop_dict))
+            # Log
+            log.debug("Droplet content: %s, Rivers: %s" 
+                      % (self.drop_dict['droplet_content'], river_ids))
+            
+            # Attempt publishing the droplet
+            try:
+                self.drop_dict['river_id'] = river_ids
+                
+                # Don't wait for acknwoledgement from the consumer - causes a 
+                # TCP BackPressure warning as a result of the broker using up
+                # more than the allocated memory - 40% of installed RAM
+                self.channel.basic_publish(exchange='', 
+                                           routing_key=Worker.DROPLET_QUEUE,
+                                           body=json.dumps(self.drop_dict))
+            except pika.exceptions.AMQPConnectionError, msg:
+                # Log warnings
+                log.error("Failed to submit drop to the Droplet Queue: %s" % msg)
+            except Exception, msg:
+                # Catch any other unhandled exception
+                log.exception(msg)
         
 
 class TwitterFirehoseWorker(Worker):
+    """
+    Worker to bootstrap the firehose and handle reconnection when new 
+    predicates are received
+    """
     
     def __init__(self, name, mq_host, queue, options=None):
         Worker.__init__(self, name, mq_host, queue, options)
@@ -80,7 +107,120 @@ class TwitterFirehoseWorker(Worker):
         
         # Firehose not running
         self.firehose_running = False
+        self.firehose_stream = None
+        self.stream_listener = None
     
+    def __update_filter_predicates(self, predicates):
+        """Gets the diff between the current set of predicates
+        and the newly submitted set  
+        """
+        t = self.__get_filter_predicates(predicates)
+
+        follow = None if t[0] is None else t[0]
+        track = None if t[1] is None else t[1]
+        
+        # Compute the follow diff
+        follow_diff = None
+        if not follow is None:
+             follow_diff = follow if self.follow is None else list(set(follow) - set(self.follow))
+
+        # Computer the track diff
+        track_diff = None
+        if not track is None:
+             track_diff = track if self.track is None else list(set(track) - set(self.track))
+        
+        if track_diff or follow_diff:
+            # Connect to the firehose with the new predicates, disconnect
+            # current connection
+            return
+        elif track_diff is None and follow_diff is None:
+            # Check for river id updates
+            self.stream_listener.update_predicate_river_ids(predicates)
+        
+             
+
+    def __get_filter_predicates(self, predicates):
+        """Given a dictionary of predicates, returns lists
+        of the keywords to track and people to follow via the
+        streaming API.
+        """ 
+        track = (predicates.get('track').keys() 
+                 if predicates.has_key('track') else None)
+        
+        follow = (predicates.get('follow').keys() 
+                  if predicates.has_key('follow') else None)
+        
+        return follow, track
+        
+    def firehose_reconnect(self):
+        """Reconnects to the firehose"""
+        pass
+    
+    def handle_mq_response(self, ch, method, properties, body):
+        """Overrides Worker.handle_mq_response"""
+        
+        # Get the items to place on the firehose
+        predicates = json.loads(body)
+        log.info("Received filter predicates for the firehose")
+        
+        stream_listener = None
+        if not self.firehose_running:
+            self.predicates = predicates
+            self.stream_listener = FirehoseStreamListener(self.mq_host, predicates)
+
+        # Initialize twitter streaming 
+        firehose_stream = None
+        if not self.firehose_running:
+            self.firehose_running = True
+            self.firehose_stream = Stream(self.auth, self.stream_listener, secure=True)
+            
+            # Get the list of keywords to track and people to follow
+            t = self.__get_filter_predicates(predicates)
+            self.follow, self.track = t[0], t[1]
+            
+            log.debug("Keywords to track %r" % self.track)
+            log.debug("People to follow %r" % self.follow)
+            
+            # Start the firehose filter
+            log.info("Initializing Twitter Streaming")
+            self.firehose_stream.filter(self.follow, self.track, True)
+        else:
+            # A connection to the firehose exists
+            # Update tracking predicates
+            self.__update_filter_predicates(predicates)
+        
+        #Acknowledge delivery
+        ch.basic_ack(delivery_tag = method.delivery_tag)
+        
+
+class FirehoseStreamListener(StreamListener):
+    """Firehose stream listener for processing incoming firehose data"""
+    
+    def __init__(self, mq_host, predicates):
+        StreamListener.__init__(self)
+        
+        self.channel = None
+        
+        # Attempt reconnection until we're successful
+        while self.channel is None:
+            try:
+                connection = pika.BlockingConnection(pika.ConnectionParameters(host=mq_host), 
+                                                     pika.reconnection_strategies.SimpleReconnectionStrategy())
+                self.channel = connection.channel()
+                self.channel.queue_declare(queue=Worker.DROPLET_QUEUE, durable=True)
+            except socket.error, msg:
+                log.error("Error connecting StreamListener to the MQ. Retrying...")
+                time.sleep(60)
+            except pika.exceptions.ChannelClosed, e:
+                log.error("StreamListener lost connection to the MQ, reconnecting")
+                time.sleep(60)
+        
+        # Dict of the predicats
+        self.__predicate_dict = predicates
+        
+        # Flatten the fiter predicates
+        self.__predicate_list = self.__flatten_filter_predicates(predicates)
+   
     def __flatten_filter_predicates(self, predicates):
         """
         Given a dictionary of filter predicates, return a list of tuples
@@ -95,82 +235,59 @@ class TwitterFirehoseWorker(Worker):
                     combined[term] = set(river_ids)
         
         # Final set - generate the tuples
+        output = []
         for k, v in combined.iteritems():
-            self.predicates.append((k, list(v)))
+            output.append((k, list(v)))
         
-        
-    def handle_mq_response(self, ch, method, properties, body):
-        # Get the items to place on the firehose
-        predicates = json.loads(body)
-        self.__flatten_filter_predicates(predicates)
-        
-        log.info("Received filter predicates for the firehose")
-        
-        # Intialize the firehose stream listener - handles data received
-        # from the stream
-        stream_listener = FirehoseStreamListener(self.mq, self)
-        
-        track = (predicates.get('track').keys() 
-                 if predicates.has_key('track') else None)
-        
-        follow = None
-#        follow = (predicates.get('follow').keys() 
-#                  if predicates.has_key('follow') else None)
-        
-        # Test filter predicates
-#        track = ["Uganda", "International Women's Day", "Kardashian", "iwd"]
-#        follow = None
-        
-        log.debug("Keywords to track %r" % track)
-        log.debug("People to follow %r" %follow)
-        
-        # Initialize a stream listener
-        firehose_stream = None
-        if not self.firehose_running:
-            self.firehose_running = True
-            firehose_stream = Stream(self.auth, stream_listener, secure=True)
-            
-        # Start the firehose filter
-        log.info("Initializing the Twitter Streaming API - Filter method")
-        firehose_stream.filter(follow, track, True)
-        
-        #Acknowledge delivery
-        ch.basic_ack(delivery_tag = method.delivery_tag)
-        
+        return output
 
-class FirehoseStreamListener(StreamListener):
-    
-    def __init__(self, mq, firehose_worker):
-        StreamListener.__init__(self)
+    def update_predicate_river_ids(self, updated):
+        """Given a dictionary of predicates, determines which predicates
+        need to be updated with new rivers. Results in the modification
+        of the internal predicate list  
+        """
         
-        self.channel = mq.channel()
-        self.firehose_worker = firehose_worker
+        # NOTE: Duplicate river_ids will be filtered out by the flattening step
+        for k, v in updated:
+            for p, r in v.iteritems():
+                # Compute diff of river ids and extend by the result
+                try:
+                    current_list = self.__predicate_dict[k][p]
+                    current_list.extend(list(set(r) - set(current_list)))
+                    self.__predicate_dict[k][p] = current_list
+                except KeyError:
+                    self.__predicate_dict[k] = {p: r}
         
+        # Update the list
+        self.__predicate_list = self.__flatten_filter_predicates(self.__predicate_dict)
+            
     def on_data(self, data):
        """Called when raw data is received from the connection"""
        
        if 'in_reply_to_status_id' in data:
            payload = json.loads(data)
            
+           # Twitter appears to be using RFC822 dates, parse them as such 
            drop_dict = {
                         'channel': 'twitter',
                         'identity_orig_id': payload['user']['id_str'],
                         'identity_name': payload['user']['name'],
                         'identity_username': payload['user']['screen_name'],
                         'identity_avatar': payload['user']['profile_image_url'],
-                        'droplet_org_id': payload['id_str'],
+                        'droplet_orig_id': payload['id_str'],
                         'droplet_type': 'original',
                         'droplet_title': payload['text'],
                         'droplet_content': payload['text'],
                         'droplet_locale': payload['user']['lang'],
-                        'droplet_date_pub': payload['created_at']
+                        'droplet_date_pub': time.strftime('%Y-%m-%d %H:%M:%S', 
+                                                          rfc822.parsedate(payload['created_at']))
                         }
            
-#           log.debug("Droplet to be mapped %r" %drop_dict)
-           
            # Spawn a predicate match worker
-           FilterPredicateMatchWorker(self.channel, 
-                                      self.firehose_worker.predicates, drop_dict).start()
+           worker = FilterPredicateMatchWorker(self.channel, self.__predicate_list, 
+                                               drop_dict)
+           
+           Thread(target=worker.run).start()
            
 
        elif 'delete' in data:
@@ -181,7 +298,8 @@ class FirehoseStreamListener(StreamListener):
            track = json.loads(data)['limit']['track']
            self.on_limit(track)
        else:
-           log.info("Out of sequence API response %s" % data)
+           # Out of sequence response, pass
+           pass
        
     
     def on_status(self, status):
@@ -213,7 +331,7 @@ class TwitterFirehoseDaemon(Daemon):
         
         self.__mq_host = options.get('mq_host')
         self.__options = options.get('auth')
-    
+        
     def run(self):
         try:
             event = Event()

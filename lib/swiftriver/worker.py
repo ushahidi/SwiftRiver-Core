@@ -67,9 +67,10 @@ class Worker(Thread):
                 worker_channel.basic_consume(self.handle_mq_response, queue=self.queue)
                 worker_channel.start_consuming()
             except socket.error, msg:
-                log.error("%s error connecting to the MQ. Retrying..." % self.name)
+                log.error("%s error connecting to the MQ: %s. Retrying..." % (self.name, msg))
             except pika.exceptions.AMQPConnectionError, e:
                 log.error("%s lost connection to the MQ, reconnecting" % self.name)
+                log.exception(e)
                 time.sleep(60)
   
     def get_cursor(self):

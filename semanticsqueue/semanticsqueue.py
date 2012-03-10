@@ -22,8 +22,7 @@ from swiftriver import Worker, Daemon
 class SemanticsQueueWorker(Worker):
     
     def __init__(self, name, mq_host, queue, options=None):
-        super(Worker, self).__init__(name, mq_host, queue, options)
-        self.start()
+        Worker.__init__(self, name, mq_host, queue, options)
     
     def handle_mq_response(self, ch, method, properties, body):
         """POSTs the droplet to the semantics API"""
@@ -123,7 +122,8 @@ class SemanticsQueueDaemon(Daemon):
         }
         
         for x in range(self.num_workers):
-            SemanticsQueueWorker("semanticsqueue-worker-" + str(x), self.mq_host, queue_name, options)
+            SemanticsQueueWorker("semanticsqueue-worker-" + str(x), self.mq_host, 
+                                 queue_name, options).start()
             
         log.info("Workers started");
         event.wait()

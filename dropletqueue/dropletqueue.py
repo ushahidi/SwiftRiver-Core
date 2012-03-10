@@ -80,15 +80,12 @@ class DropletQueueDaemon(Daemon):
         self.__mq_host = mq_host
     
     def run(self):
-        # Name of the queue
-        queue_name = Worker.DROPLET_QUEUE
-        
         # Options to be passed on to the worker thread
-        options = {"api_url": self.__api_url}
+        options = {"api_url": self.__api_url, 'durable_queue': True}
         
         for x in range(self.__num_workers):
             DropletQueueWorker("dropletqueue-worker-" + str(x), self.__mq_host, 
-                               queue_name, options)
+                               Worker.DROPLET_QUEUE, options)
         
         log.info("Workers started");
         while True:
