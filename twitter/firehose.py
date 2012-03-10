@@ -25,7 +25,6 @@ against the content
 def predicate_match(L):
     # Look for space delimited strings
     search_pattern = L[0].split(" ")
-#    log.debug("\nPattern: %s\n String: %s" % (L[0], L[2]))
         
     if len(search_pattern) == 1:
         return [] if re.search(L[0], L[2], re.IGNORECASE) is None else L[1]
@@ -105,57 +104,34 @@ class TwitterFirehoseWorker(Worker):
         
         self.predicates = []
         
-        # Firehose not running
         self.firehose_running = False
         self.firehose_stream = None
         self.stream_listener = None
+        
+        # Firehose reconnection stream and listener references  
+        self.__reconnect_stream = None
+        self.__reconnect_listener = None
     
-    def __update_filter_predicates(self, predicates):
-        """Gets the diff between the current set of predicates
-        and the newly submitted set  
-        """
-        t = self.__get_filter_predicates(predicates)
-
-        follow = None if t[0] is None else t[0]
-        track = None if t[1] is None else t[1]
-        
-        # Compute the follow diff
-        follow_diff = None
-        if not follow is None:
-             follow_diff = follow if self.follow is None else list(set(follow) - set(self.follow))
-
-        # Computer the track diff
-        track_diff = None
-        if not track is None:
-             track_diff = track if self.track is None else list(set(track) - set(self.track))
-        
-        if track_diff or follow_diff:
-            # Connect to the firehose with the new predicates, disconnect
-            # current connection
-            return
-        elif track_diff is None and follow_diff is None:
-            # Check for river id updates
-            self.stream_listener.update_predicate_river_ids(predicates)
-        
-             
-
-    def __get_filter_predicates(self, predicates):
-        """Given a dictionary of predicates, returns lists
-        of the keywords to track and people to follow via the
-        streaming API.
-        """ 
-        track = (predicates.get('track').keys() 
-                 if predicates.has_key('track') else None)
-        
-        follow = (predicates.get('follow').keys() 
-                  if predicates.has_key('follow') else None)
-        
-        return follow, track
-        
-    def firehose_reconnect(self):
+    def firehose_reconnect():
         """Reconnects to the firehose"""
-        pass
-    
+        
+        log.info("Reconnecting to the firehose with the updated filter predicates")
+        
+        self.__reconnect_listener = FirehoseStreamListener(self.mq_host, 
+                                                         self.predicates, self)
+        
+        t = self.__get_filter_predicates(self.predicates)
+        self.follow, self.track = t[0], t[1]
+        
+        self.__reconnect_stream = Stream(self.auth, self.__reconnect_listener, secure=True)
+        self.__reconnect_stream.filter(self.follow, self.track, True)
+
+    def disconnect_firehose(self):
+        """ Disconnects from the current firehose stream"""
+        self.firehose_stream.disconnect()
+        self.firehose_stream = self.__reconnect_stream
+        self.stream_listener = self.__reconnect_listener
+            
     def handle_mq_response(self, ch, method, properties, body):
         """Overrides Worker.handle_mq_response"""
         
@@ -191,12 +167,61 @@ class TwitterFirehoseWorker(Worker):
         
         #Acknowledge delivery
         ch.basic_ack(delivery_tag = method.delivery_tag)
+    
+    def __update_filter_predicates(self, predicates):
+        """Gets the diff between the current set of predicates
+        and the newly submitted set  
+        """
+        # Get the new follow and track predicates
+        t = self.__get_filter_predicates(predicates)
+
+        follow = None if t[0] is None else t[0]
+        track = None if t[1] is None else t[1]
         
+        # Compute the follow diff
+        follow_diff = []
+        if follow is not None:
+             follow_diff = follow if self.follow is None else list(set(follow) - set(self.follow))
+
+        # Computer the track diff
+        track_diff = []
+        if track is not None:
+             track_diff = track if self.track is None else list(set(track) - set(self.track))
+        
+        if len(track_diff) > 0 or len(follow_diff) > 0:
+            # Update the list of predicates 
+            for k, v in predicates.iteritems():
+                for p, r in v.iteritems():
+                    try:
+                        d = self.predicates[k][p]
+                        self.predicates[k][p] = list(set(d.extend(r)))
+                    except KeyErrorr:
+                        self.predicates[k] = {p: r}
+            
+            # Reconnect to the firehose with the updated predicates
+            self.firehose_reconnect()
+        elif len(track_diff) == 0 and len(follow_diff) == 0:
+            # Check for river id updates
+            self.stream_listener.update_predicate_river_ids(predicates)
+        
+    def __get_filter_predicates(self, predicates):
+        """Given a dictionary of predicates, returns lists
+        of the keywords to track and people to follow via the
+        streaming API.
+        """ 
+        track = (predicates.get('track').keys() 
+                 if predicates.has_key('track') else None)
+        
+        follow = (predicates.get('follow').keys() 
+                  if predicates.has_key('follow') else None)
+        
+        return follow, track        
+
 
 class FirehoseStreamListener(StreamListener):
     """Firehose stream listener for processing incoming firehose data"""
     
-    def __init__(self, mq_host, predicates):
+    def __init__(self, mq_host, predicates, firehose_worker=None):
         StreamListener.__init__(self)
         
         self.channel = None
@@ -215,32 +240,12 @@ class FirehoseStreamListener(StreamListener):
                 log.error("StreamListener lost connection to the MQ, reconnecting")
                 time.sleep(60)
         
-        # Dict of the predicats
+        self.__firehose_worker = firehose_worker
         self.__predicate_dict = predicates
         
         # Flatten the fiter predicates
-        self.__predicate_list = self.__flatten_filter_predicates(predicates)
+        self.__predicate_list = utils.flatten_filter_predicates(predicates)
    
-    def __flatten_filter_predicates(self, predicates):
-        """
-        Given a dictionary of filter predicates, return a list of tuples
-        of predicates and the list of river ids they relate to.
-        """
-        combined = {}
-        for k, v in predicates.iteritems():
-            for term, river_ids in v.iteritems():
-                try:
-                    combined[term].update(set(river_ids))
-                except KeyError:
-                    combined[term] = set(river_ids)
-        
-        # Final set - generate the tuples
-        output = []
-        for k, v in combined.iteritems():
-            output.append((k, list(v)))
-        
-        return output
-
     def update_predicate_river_ids(self, updated):
         """Given a dictionary of predicates, determines which predicates
         need to be updated with new rivers. Results in the modification
@@ -259,12 +264,19 @@ class FirehoseStreamListener(StreamListener):
                     self.__predicate_dict[k] = {p: r}
         
         # Update the list
-        self.__predicate_list = self.__flatten_filter_predicates(self.__predicate_dict)
+        self.__predicate_list = utils.flatten_filter_predicates(self.__predicate_dict)
             
     def on_data(self, data):
        """Called when raw data is received from the connection"""
        
        if 'in_reply_to_status_id' in data:
+           if self.__firehose_worker is not None:
+               # Disconnect the current firehose connection and kill
+               # reference to the firehose worker thread
+               log.info("Disconnecting current firehose connection...")
+               self.firehose_worker.disconnect_firehose()
+               self.firehose_worker = None
+           
            payload = json.loads(data)
            
            # Twitter appears to be using RFC822 dates, parse them as such 

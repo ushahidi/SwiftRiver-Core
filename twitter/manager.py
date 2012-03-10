@@ -71,21 +71,19 @@ class TwitterFirehoseManager:
         # Acquire lock and proceed
         with self.__lock:
             # Grab essential data
-            predicate_type = "follow" if payload['key'] == "person" else "track"
-            filter_predicate = payload['value']['value']
+            predicate_type = "follow" if payload['key'].lower() == "person" else "track"
+            filter_predicate = json.loads(payload['value'])['value']
             river_id = payload['river_id']
             
             # Get the update target
-            update_target = (self.__predicates[predicate_type] 
-                             if self.__predicates.has_key(predicate_type) else {})
+            update_target = self.__predicates.get(predicate_type, dict())
+            current_target = dict(update_target)
             
-            # Make a copy of the update target, for getting the diff
-            current_target = update_target
             self.__sanitize_filter_predicate(filter_predicate, update_target, river_id)
             
             # set-list conversion
             for k, v in update_target.iteritems(): update_target[k] = list(v)
-
+            
             # Update internal list of predicates
             self.__predicates[predicate_type] = update_target
             
@@ -98,7 +96,7 @@ class TwitterFirehoseManager:
                 # Predicate type existing prior to sanitization, compute diff
                 new_predicates = list(set(update_target.keys()) - 
                                       set(current_target.keys()))
-
+                
                 # Check for new predicates                
                 if len(new_predicates) > 0:
                     publish_data[predicate_type] = {}
@@ -106,21 +104,22 @@ class TwitterFirehoseManager:
                     for v in k: publish_data[predicate_type].update(v)
                 elif len(new_predicates) == 0:
                     # No new filter predicates, check for rivers update for each predicate
-                    publish_data[predicate_key] = {}
+                    publish_data[predicate_type] = {}
                     
                     for k,v in update_target.iteritems():
                         # Get the rivers associated with the current list of rivers
                         g = current_target[k]
                         rivers_diff = list(set(v) - set(g))
                         if len(rivers_diff) > 0:
-                            publish_data[predicate_key].update({k: rivers_diff})
+                            publish_data[predicate_type].update({k: rivers_diff})
                     
                     # Verify that there's data to be published
-                    if len(publish_data[predicate_key]) == 0: publish_data = {}
+                    if len(publish_data[predicate_type]) == 0: publish_data = {}
                 
-            
             # Check if there's any data to be published            
             if len(publish_data) > 0:
+                log.debug("Publishing %r to the firehose" % publish_data)
+                
                 # Construct the message to sent out to the process consuming the firehose
                 message = json.dumps(publish_data)
                         
@@ -155,7 +154,7 @@ class TwitterFirehoseManager:
             update_target[term].add(river_id)
             
             
-    def remove_channel_option(self, channel_option):
+    def delete_filter_predicate(self, payload):
         # Remove the predicate from the internal cache and from 
         # firehose predicates list
         pass
@@ -175,7 +174,7 @@ class TwitterFirehoseManager:
         
         predicates = {}
         for river_id, key, value in c.fetchall():
-            predicate_key = 'track' if key == 'keyword' else 'follow'
+            predicate_key = 'track' if key.lower() == 'keyword' else 'follow'
             
             if not predicates.has_key(predicate_key):
                 predicates[predicate_key] = {}
@@ -272,24 +271,18 @@ class TwitterPredicateUpdateWorker(Worker):
             payload = json.loads(body)
             # Add predicates
             if method.routing_key == "web.channel_option.twitter.add":
-                log.info("Firehose filter predicate added %s" % payload['value'])
-                self.__firehose_manager.add_filter_predicate(payload)
+                self.__firehose_manager.add_filter_predicate(self.mq, payload)
             
             # Delete predicates
             if method.routing_key == "web.channel_option.twitter.delete":
                 log.info("Firehose filter predicate removed %s" % payload['value'])
-                if payload['key'] == 'keyword':
-                    # Delete keyword
-                    pass
+                self.__firehose_manager.delete_filter_predicate(payload)
                 
-                if payload['key'] == 'person':
-                    # Delete person
-                    pass
-            
-            ch.basic_ack(delivery_tag=method.delivery_tag)
         except Exception, e:
             log.info(e)
             log.exception(e)
+        
+        ch.basic_ack(delivery_tag=method.delivery_tag)
 
     
 class TwitterFirehoseManagerDaemon(Daemon):
