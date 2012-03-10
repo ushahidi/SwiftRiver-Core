@@ -26,8 +26,15 @@ class SemanticsQueueWorker(Worker):
     
     def handle_mq_response(self, ch, method, properties, body):
         """POSTs the droplet to the semantics API"""
+        droplet = None
+        try:
+            droplet = json.loads(body)
+        except ValueError, e:
+            # Bad value in the queue, skip it
+            log.error(" %s bad value received in the queue" % (self.name,))
+            ch.basic_ack(delivery_tag = method.delivery_tag)
+            return
         
-        droplet = json.loads(body)
         log.info(" %s droplet received with id %d" % (self.name, droplet.get('id', 0)))
         droplet_raw = re.sub(r'<[^>]*?>', '', droplet['droplet_raw']).strip().encode('utf-8', 'ignore')
         
