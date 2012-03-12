@@ -10,7 +10,7 @@ If the scheduler requests a url from the cache, the fetcher will return droplets
 cache if available of do a HTTP request if there are not droplets for the url in the cache.
 
 
-Copyright (c) 2012 Ushahidi. All rights reserved.
+Copyright (c) 2012 Ushahidi. All rights reserved. 
 """
 
 import sys
