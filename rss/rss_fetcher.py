@@ -21,6 +21,7 @@ import feedparser
 import json
 import ConfigParser
 import pickle
+import hashlib
 from threading import Event
 from os.path import dirname, realpath
 from swiftriver import Daemon, Worker
@@ -106,7 +107,7 @@ class RssFetcherWorker(Worker):
                         'identity_username' : d.feed.get('link', message['url']),
                         'identity_name': identity_name,
                         'identity_avatar': avatar,
-                        'droplet_orig_id' : entry.get('link', None),
+                        'droplet_orig_id' : hashlib.sha256(entry.get('link', '')+entry.get('id', '')).hexdigest(),
                         'droplet_type': 'original',
                         'droplet_title': entry.get('title', None),
                         'droplet_content': content,
