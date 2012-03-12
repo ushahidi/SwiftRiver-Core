@@ -118,7 +118,7 @@ class LinkExtractorQueueDaemon(Daemon):
         event = Event()
         
         queue_name = 'LINK_EXTRACTOR_QUEUE'
-        options = {'exchange_name': 'metadata', 'exchange_type': 'fanout'}
+        options = {'exchange_name': 'metadata', 'exchange_type': 'fanout', 'durable_queue': True}
         
         for x in range(self.num_workers):
             LinkExtractorQueueWorker("linkextractor-worker-" + str(x), self.mq_host, queue_name, options)

@@ -23,6 +23,7 @@ class SemanticsQueueWorker(Worker):
     
     def __init__(self, name, mq_host, queue, options=None):
         Worker.__init__(self, name, mq_host, queue, options)
+        self.h = Http()
     
     def handle_mq_response(self, ch, method, properties, body):
         """POSTs the droplet to the semantics API"""
@@ -47,12 +48,11 @@ class SemanticsQueueWorker(Worker):
         headers = {'Content-type': 'application/x-www-form-urlencoded'}
         
         resp = content = None
-        h = Http()
         api_url = self.options.get('api_url')
         
         while not resp:
             try:
-                resp, content = h.request(api_url, 'POST', body=urlencode(post_data), headers=headers)
+                resp, content = self.h.request(api_url, 'POST', body=urlencode(post_data), headers=headers)
                 
                 # If no OK response, keep retrying
                 if resp.status != 200:
@@ -125,7 +125,8 @@ class SemanticsQueueDaemon(Daemon):
         queue_name = 'SEMANTICS_QUEUE'
         options = {'api_url':self.api_url, 
                    'exchange_name': 'metadata', 
-                   'exchange_type':'fanout'
+                   'exchange_type': 'fanout',
+                   'durable_queue': True
         }
         
         for x in range(self.num_workers):

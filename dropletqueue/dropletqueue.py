@@ -24,6 +24,7 @@ class DropletQueueWorker(Worker):
     
     def __init__(self, name, mq_host, queue, options=None):
         Worker.__init__(self, name, mq_host, queue, options)
+        self.h = Http()
         self.start()
     
     
@@ -35,12 +36,11 @@ class DropletQueueWorker(Worker):
                  % (self.name, droplet.get('id', 0), droplet.get('channel', '')))
         
         resp = content = None
-        h = Http()
         api_url = self.options.get('api_url')
         
         while not resp:
             try:
-                resp, content = h.request(api_url, 'POST', body=json.dumps(droplet))
+                resp, content = self.h.request(api_url, 'POST', body=json.dumps(droplet))
                 
                 # If no OK response, keep retrying
                 if resp.status != 200:
