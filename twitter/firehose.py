@@ -41,10 +41,11 @@ def predicate_match(L):
         return L[1] if found else []
                 
 
-class FilterPredicateMatcher():
+class FilterPredicateMatcher(Thread):
     """ Predicate matching thread"""
     
     def __init__(self, mq_host, predicates, drop_dict):
+        Thread.__init__(self)
         self.predicates = []
         
         # Attempt to get a connection
@@ -74,6 +75,9 @@ class FilterPredicateMatcher():
         pool = Pool(processes=5)
         river_ids = pool.map(predicate_match, self.predicates)
         
+        # Terminate the workers
+        pool.terminate()
+        
         # Flatten the river ids into a set
         river_ids = list(itertools.chain(*river_ids))
         if len(river_ids) > 0:
@@ -87,6 +91,7 @@ class FilterPredicateMatcher():
                                        routing_key=Worker.DROPLET_QUEUE,
                                        properties=pika.BasicProperties(delivery_mode=2),
                                        body=json.dumps(self.drop_dict))
+        
         
 
 class TwitterFirehoseWorker(Worker):
@@ -287,13 +292,10 @@ class FirehoseStreamListener(StreamListener):
                         }
            
            # Spawn a predicate match worker
-           worker = FilterPredicateMatcher(self.mq_host, 
-                                           self.__predicate_list, 
-                                           drop_dict)
+           FilterPredicateMatcher(self.mq_host, 
+                                  self.__predicate_list, 
+                                  drop_dict).start()
            
-           Thread(target=worker.run).start()
-           
-
        elif 'delete' in data:
            status = json.loads(data)['delete']['status']
            status_id, user_id = status['id_str'], status['user_id_str']
