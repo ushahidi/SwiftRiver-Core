@@ -7,57 +7,25 @@ the update droplet back to the DROPLET_QUEUE for updating in the db
 Copyright (c) 2012 Ushahidi. All rights reserved.
 """
 
-import sys, time
+import sys
 import ConfigParser
-import socket
 import logging as log
-import MySQLdb
 import pika
 import json, re
-from urllib import urlencode
-from daemon import Daemon
-from threading import Thread, Event
-from httplib2 import Http, SSLHandshakeError, ServerNotFoundError
+from threading import Event
+from httplib2 import Http
 from os.path import dirname, realpath
+from swiftriver import Daemon, Worker
 
-class LinkExtractorQueue(Thread):
+
+class LinkExtractorQueueWorker(Worker):
     
-    LINK_EXTRACTOR_QUEUE = 'LINK_EXTRACTOR_QUEUE'
-    DROPLET_QUEUE = 'DROPLET_QUEUE'
-    
-    def __init__(self, name, mq_host, event):
-        Thread.__init__(self)
-        self.daemon = True
-        self.name = name
-        self.event = event
-        self.mq_host = mq_host
+    def __init__(self, name, mq_host, queue, options=None):
+        Worker.__init__(self, name, mq_host,  queue, options)
         self.start()
+
     
-    def run(self):
-        """Register our handler for fetcher responses"""
-        log.info("Registering droplet handler %s" % self.name)
-        
-        # Connect to the MQ, retry on failure
-        while True:
-            try:
-                self.mq = pika.BlockingConnection(pika.ConnectionParameters(
-                        host=self.mq_host))
-                semantics_channel = self.mq.channel()
-                semantics_channel.exchange_declare(exchange='metadata', type='fanout', durable=True)        
-                semantics_channel.queue_declare(queue=self.LINK_EXTRACTOR_QUEUE, durable=True)
-                semantics_channel.queue_bind(exchange='metadata',queue=self.LINK_EXTRACTOR_QUEUE)
-                semantics_channel.basic_qos(prefetch_count=1)
-                semantics_channel.basic_consume(self.handle_droplet,
-                                      queue=self.LINK_EXTRACTOR_QUEUE)            
-                semantics_channel.start_consuming()
-            except socket.error, msg:
-                log.error("%s error connecting to the MQ, retrying" % (self.name))
-                time.sleep(60)
-            except pika.exceptions.AMQPConnectionError, e:
-                log.error("%s lost connection to the MQ, reconnecting" % (self.name))
-                time.sleep(60)
-    
-    def handle_droplet(self, ch, method, properties, body):
+    def handle_mq_response(self, ch, method, properties, body):
         """POSTs the droplet to the semantics API"""
         droplet = None
         try:
@@ -148,14 +116,20 @@ class LinkExtractorQueueDaemon(Daemon):
     
     def run(self):
         event = Event()
-        for x in range(self.num_workers): LinkExtractorQueue("linkextractor-worker-" + str(x), self.mq_host, event)
+        
+        queue_name = 'LINK_EXTRACTOR_QUEUE'
+        options = {'exchange_name': 'metadata', 'exchange_type': 'fanout'}
+        
+        for x in range(self.num_workers):
+            LinkExtractorQueueWorker("linkextractor-worker-" + str(x), self.mq_host, queue_name, options)
+        
         log.info("Workers started");
         event.wait()
         log.info("Exiting");
             
 if __name__ == "__main__":
     config = ConfigParser.SafeConfigParser()
-    config.readfp(open(dirname(realpath(__file__))+'/linkextractor.cfg'))
+    config.readfp(open(dirname(realpath(__file__))+'/config/linkextractor.cfg'))
     
     try:
         log_file = config.get("main", 'log_file')

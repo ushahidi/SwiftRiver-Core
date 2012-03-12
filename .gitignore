@@ -4,3 +4,6 @@
 *pyc
 *cfg
 */logs/*
+/.pydevproject
+/.project
+/.settings

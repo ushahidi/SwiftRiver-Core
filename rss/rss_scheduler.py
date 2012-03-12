@@ -19,9 +19,10 @@ import MySQLdb
 import pika
 import ConfigParser
 import socket
-from daemon import Daemon
 from threading import Thread, RLock
 from os.path import dirname, realpath
+from swiftriver import Worker, Daemon
+
 
 class RssFetchScheduler:    
     """Queues urls to be processed by rss fetcher workers"""
@@ -38,7 +39,7 @@ class RssFetchScheduler:
         self.lock = RLock()
         
     def get_cursor(self):
-        """Get a db conneciton and attempt reconnection"""
+        """Get a db connection and attempt reconnection"""
         cursor = None
         while not cursor:
             try:        
@@ -155,7 +156,7 @@ class RssFetchScheduler:
         
     def run_scheduler(self):
         """
-        Submits URLs to the MQ that were last fetched more than MAX_FETCH_INTERVAL aga
+        Submits URLs to the MQ that were last fetched more than MAX_FETCH_INTERVAL
         and marks them as submitted
         """
         while True:
@@ -172,11 +173,12 @@ class RssFetchScheduler:
                     jobs = []
                     with self.lock:
                         jobs = [{"url": url, 
-                                    "last_fetch_time": self.rss_urls[url]["last_fetch_time"],
-                                    "submitted": self.rss_urls[url]["submitted"]
-                                    } for url in self.rss_urls]
-                    jobs = filter(lambda x: not x["submitted"] and 
-                                            time.mktime(time.gmtime()) - x["last_fetch_time"] > self.MAX_FETCH_INTERVAL, 
+                                 "last_fetch_time": self.rss_urls[url]["last_fetch_time"],
+                                 "submitted": self.rss_urls[url]["submitted"]
+                                 } for url in self.rss_urls]
+                    
+                    jobs = filter(lambda x: (not x["submitted"] 
+                                             and time.mktime(time.gmtime()) - x["last_fetch_time"] > self.MAX_FETCH_INTERVAL), 
                                         jobs)
                     jobs.sort(key=lambda x: x["last_fetch_time"])
                 
@@ -283,48 +285,40 @@ class RssFetchScheduler:
         
         # Start a pool of threads to handle responses from 
         # fetchers and update rss_urls 
-        for x in range(self.num_response_workers): FetcherResponseHandler("response-handler-" + str(x), self.mq_host, self)
+        fetch_queue = 'RSS_FETCH_RESPONSE'
+        options = {'scheduler': self, 'durable_queue': False}
+        
+        for x in range(self.num_response_workers):
+            FetcherResponseHandler("response-handler-" + str(x), self.mq_host, 
+                                   fetch_queue, options).start()
         
         # Start a pool to handle new/removed channel options from the web front end / wherever
-        for x in range(self.num_channel_update_workers): ChannelUpdateHandler("channel-handler-" + str(x), self.mq_host, self)
+        update_queue = 'RSS_UPDATE_QUEUE'
         
+        # Update the options
+        options['exchange_name'] = 'chatter'
+        options['exchange_type'] = 'topic'
+        options['routing_key'] = 'web.channel_option.rss.*';
+        options['durable_exchange'] = True
+        
+        for x in range(self.num_channel_update_workers):
+            ChannelUpdateHandler("channel-handler-" + str(x), self.mq_host, 
+                                 update_queue, options).start()        
         
         Thread(target=self.run_scheduler).start()
+
         
-class FetcherResponseHandler(Thread):
-    """Worker thread responsible for fetching articles and putting them on the droplet queue"""
+class FetcherResponseHandler(Worker):
+    """
+    Worker thread responsible for fetching articles and putting 
+    them on the droplet queue
+    """
     
-    SHEDULER_RESPONSE_QUEUE = 'RSS_FETCH_RESPONSE'
+    def __init__(self, name, mq_host, queue, options=None):
+        Worker.__init__(self, name, mq_host, queue, options)
+        self.scheduler = options.get('scheduler')
     
-    def __init__(self, name, mq_host, scheduler):
-        Thread.__init__(self)
-        self.daemon = True
-        self.name = name
-        self.scheduler = scheduler
-        self.mq_host = mq_host    
-        self.start()
-    
-    def run(self):
-        """Register our handler for fetcher responses"""
-        log.info("Registering fetcher response handler %s" % self.name)
-        while True:
-            try:
-                connection = pika.BlockingConnection(pika.ConnectionParameters(
-                        host=self.mq_host))
-                response_channel = connection.channel()
-                response_channel.queue_declare(queue=self.SHEDULER_RESPONSE_QUEUE, durable=False)  
-                response_channel.basic_qos(prefetch_count=1)      
-                response_channel.basic_consume(self.handle_fetcher_response,
-                                      queue=self.SHEDULER_RESPONSE_QUEUE)            
-                response_channel.start_consuming()
-            except socket.error, msg:
-                log.error("%s error connecting to the MQ, retrying" % (self.name))
-                time.sleep(60)
-            except pika.exceptions.AMQPConnectionError, e:
-                log.error("%s lost connection to the MQ, reconnecting" % (self.name))
-                time.sleep(60)
-    
-    def handle_fetcher_response(self, ch, method, properties, body):
+    def handle_mq_response(self, ch, method, properties, body):
         """Update rss_url status from fetcher response"""
         try:
             message = json.loads(body)
@@ -336,60 +330,37 @@ class FetcherResponseHandler(Thread):
             log.info(e);
             #Catch unhandled exceptions
             log.exception(e)
+
  
-class ChannelUpdateHandler(Thread):
-    """Thread responsisble for waiting for new channel options / deleted channel options from the web
-    front end application"""
+class ChannelUpdateHandler(Worker):
+    """Thread responsible for waiting for new/deleted channel options 
+    from the web front end application"""
     
-    UPDATE_QUEUE = 'RSS_UPDATE_QUEUE'
+    def __init__(self, name, mq_host, queue, options=None):
+        Worker.__init__(self, name, mq_host, queue, options)
+        self.scheduler = self.options.get('scheduler')
 
-    def __init__(self, name, mq_host, scheduler):
-        Thread.__init__(self)
-        self.daemon = True
-        self.name = name
-        self.scheduler = scheduler
-        self.mq_host = mq_host    
-        self.start()
-
-    def run(self):
-        log.info("Registering channel update handler %s" % self.name)
-        while True:
-            try:
-                self.mq = pika.BlockingConnection(pika.ConnectionParameters(
-                        host=self.mq_host))
-                channel = self.mq.channel()
-                channel.exchange_declare(exchange='chatter', type='topic', durable=True)
-                channel.queue_declare(queue=self.UPDATE_QUEUE, durable=False)
-                channel.queue_bind(exchange='chatter',
-                                   queue=self.UPDATE_QUEUE,
-                                   routing_key='web.channel_option.rss.*')
-                channel.basic_qos(prefetch_count=1)    
-                channel.basic_consume(self.handle_channel_update,
-                                      queue=self.UPDATE_QUEUE)            
-                channel.start_consuming()
-            except socket.error, msg:
-                log.error("%s error connecting to the MQ, retrying" % (self.name))
-                time.sleep(60)
-            except pika.exceptions.AMQPConnectionError, e:
-                log.error("%s lost connection to the MQ, reconnecting" % (self.name))
-                time.sleep(60)
-
-    def handle_channel_update(self, ch, method, properties, body):
+    def handle_mq_response(self, ch, method, properties, body):
         """Fetch a newly added channel option"""
         try:
             message = json.loads(body)
             log.debug(" %s channel option received %r" % (self.name, message))
             # Submit the channel option to the fetchers
-            if message['key'] == 'url' and message['channel'] == 'rss' and method.routing_key == 'web.channel_option.rss.add':
+            if (message['key'] == 'url' and message['channel'] == 'rss' 
+                and method.routing_key == 'web.channel_option.rss.add'):
                 self.scheduler.add_url(self.name, self.mq, message);
-            if message['key'] == 'url' and message['channel'] == 'rss' and method.routing_key == 'web.channel_option.rss.add':
+            
+            if (message['key'] == 'url' and message['channel'] == 'rss' 
+                and method.routing_key == 'web.channel_option.rss.add'):
                 self.scheduler.del_url(self.name, self.mq, message);
+            
             ch.basic_ack(delivery_tag = method.delivery_tag)
             log.debug(" %s channel option processed" % (self.name))
         except Exception, e:
             log.info(e);
             #Catch unhandled exceptions
             log.exception(e)      
+
             
 class RssFetchSchedulerDaemon(Daemon):
     def __init__(self, num_response_workers, num_channel_update_workers, mq_host, db_config, pid_file, out_file):
@@ -401,13 +372,16 @@ class RssFetchSchedulerDaemon(Daemon):
     
     def run(self):
         try:
-            RssFetchScheduler(self.num_response_workers, num_channel_update_workers, self.mq_host, self.db_config).start()
+            RssFetchScheduler(self.num_response_workers, 
+                              num_channel_update_workers, 
+                              self.mq_host, self.db_config).start()
         finally:
             log.info("Exiting");
+
             
 if __name__ == "__main__":
     config = ConfigParser.SafeConfigParser()
-    config.readfp(open(dirname(realpath(__file__))+'/rss-scheduler.cfg'))
+    config.readfp(open(dirname(realpath(__file__))+'/config/rss_scheduler.cfg'))
     
     try:
         log_file = config.get("main", 'log_file')
@@ -426,10 +400,15 @@ if __name__ == "__main__":
         }
         
         FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        log.basicConfig(filename=log_file, level=getattr(log, log_level.upper()), format=FORMAT)        
-        file(out_file, 'a') # Create outfile if it does not exist
+        log.basicConfig(filename=log_file, 
+                        level=getattr(log, log_level.upper()), format=FORMAT)
         
-        daemon = RssFetchSchedulerDaemon(num_response_workers, num_channel_update_workers, mq_host, db_config, pid_file, out_file)
+        # Create outfile if it does not exist        
+        file(out_file, 'a')
+        
+        daemon = RssFetchSchedulerDaemon(num_response_workers, 
+                                         num_channel_update_workers, 
+                                         mq_host, db_config, pid_file, out_file)
         if len(sys.argv) == 2:
             if 'start' == sys.argv[1]:
                 daemon.start()

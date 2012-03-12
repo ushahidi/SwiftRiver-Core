@@ -1,0 +1,14 @@
+[main]
+log_file=/Users/ekala/dev/SwiftRiver-Core/twitter/logs/firehose_manager.log
+out_file=/Users/ekala/dev/SwiftRiver-Core/twitter/logs/firehose_manager.out
+pid_file=/tmp/firehose_manager
+num_workers=10
+log_level=DEBUG
+mq_host=localhost
+
+[db]
+host=localhost
+port=3306
+user=root
+pass=
+database=swiftweb
