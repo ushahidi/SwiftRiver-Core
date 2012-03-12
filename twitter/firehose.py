@@ -11,7 +11,6 @@ import time
 import utils
 from multiprocessing import Pool
 from os.path import dirname, realpath
-from Queue import Queue
 from swiftriver import Daemon, Worker
 from threading import Thread, Event
 from tweepy import OAuthHandler, Stream, StreamListener
