@@ -25,12 +25,6 @@ class TwitterFirehoseManager:
     are added/deleted
     """
     
-    # Maximum no. of track predicates
-    MAX_TRACK_PREDICATES = 400
-    
-    # Maximum no. of follow predicates
-    MAX_FOLLOW_PREDICATES = 5000
-            
     def __init__(self, mq_host, db_config, predicate_workers):
         self.__mq_host = mq_host
         self.__db_config = db_config
@@ -79,6 +73,13 @@ class TwitterFirehoseManager:
             update_target = self.__predicates.get(predicate_type, dict())
             current_target = dict(update_target)
             
+            # Check for filter predicate limits
+            if not utils.allow_filter_predicate(self.__predicates, predicate_type):
+                log.info("The maximum no. of %s predicates allowed has been reached." 
+                         % predicate_type)
+                return
+            
+            # Proceed
             self.__sanitize_filter_predicate(filter_predicate, update_target, river_id)
             
             # set-list conversion
@@ -170,6 +171,7 @@ class TwitterFirehoseManager:
         FROM channel_filters cf, channel_filter_options cfo 
         WHERE cfo.channel_filter_id = cf.id 
         AND cf.channel = 'twitter'
+        AND cf.filter_enabled = 1
         """)
         
         predicates = {}
@@ -179,13 +181,17 @@ class TwitterFirehoseManager:
             if not predicates.has_key(predicate_key):
                 predicates[predicate_key] = {}
             
-            update_target = predicates[predicate_key]
-            
-            # Get filter predicate and submit it for sanitization 
-            filter_predicate = json.loads(value)['value']
-            self.__sanitize_filter_predicate(filter_predicate, update_target, river_id)
-            
-            predicates[predicate_key] = update_target
+            if utils.allow_filter_predicate(predicates, predicate_key):
+                update_target = predicates[predicate_key]
+                
+                # Get filter predicate and submit it for sanitization 
+                filter_predicate = json.loads(value)['value']
+                self.__sanitize_filter_predicate(filter_predicate, 
+                                                 update_target, river_id)
+                
+                predicates[predicate_key] = update_target
+            else:
+                break
         
         c.close()
         
@@ -202,9 +208,11 @@ class TwitterFirehoseManager:
             try:
                 if self.__predicates_changed:
                     message = json.dumps(self.__predicates)
-                    log.info("Placing filter predicates in the firehose queue %r" % message)
+                    log.info("Placing filter predicates in the firehose queue %r" 
+                             % message)
                     
-                    connection = pika.BlockingConnection(pika.ConnectionParameters(host=self.__mq_host))
+                    params = pika.ConnectionParameters(host=self.__mq_host)
+                    connection = pika.BlockingConnection(params)
                     
                     channel = connection.channel()
                     channel.queue_declare(queue=utils.FIREHOSE_QUEUE, durable=False)
@@ -216,7 +224,8 @@ class TwitterFirehoseManager:
                 
                 time.sleep(5)
             except socket.error, msg:
-                log.error(" Firehose manager error connecting to the MQ, retrying")
+                log.error("%s Firehose manager error connecting to the MQ, retrying" 
+                          % msg)
                 time.sleep(60)
             except pika.exceptions.AMQPConnectionError, e:
                 log.error(" Firehose manager lost connection to the MQ, reconnecting")
@@ -323,7 +332,9 @@ if __name__ == '__main__':
         log_level = config.get('main', 'log_level')
         
         FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        log.basicConfig(filename=log_file, level=getattr(log, log_level.upper()), format=FORMAT)
+        log.basicConfig(filename=log_file, level=getattr(log, 
+                                                         log_level.upper()), 
+                                                         format=FORMAT)
         
         # Create outfile if it does not exist        
         file(out_file, 'a')
