@@ -10,7 +10,7 @@ Also listens for new rss channel filters and deleted rss channel filters publish
 to the web app on the chatter exchange in the MQ and updates its in memory cache
 accordingly.
 
-Copyright (c) 2012 Ushahidi. All rights reserved.
+Copyright (c) 2012 Ushahidi. All rights reserved. 
 """
 
 import sys, time, json
