@@ -91,7 +91,12 @@ class LinkExtractorQueue(Thread):
         pattern += "(?:/[^\\s]*)?"
         
         # Strip tags leaving only hyperlinks
-        droplet_raw = re.sub(r'<(?!\s*[aA]\s*)[^>]*?>', '', droplet['droplet_raw']).strip().encode('ascii', 'ignore')
+        droplet_raw = re.sub(r'<(?!\s*[aA]\s*)[^>]*?>', '', droplet['droplet_raw'])
+        
+        # Extract the href from hyperlinks since the regex above expects a space character
+        # at the end of the url
+        droplet_raw = re.sub(r'(?i)<(?=\s*[a]\s+)[^>]*href\s*=\s*"([^"]*)"[^>]*?>', ' \\1 ', droplet_raw)
+        
         
         for link in re.findall(pattern, droplet_raw):
             if not droplet.has_key('links'):
