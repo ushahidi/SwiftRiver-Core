@@ -41,12 +41,25 @@ def predicate_match(L):
         return L[1] if found else []
                 
 
-class FilterPredicateMatchWorker():
+class FilterPredicateMatcher():
     """ Predicate matching thread"""
     
-    def __init__(self, channel, predicates, drop_dict):
-        self.channel = channel
+    def __init__(self, mq_host, predicates, drop_dict):
         self.predicates = []
+        
+        # Attempt to get a connection
+        try:
+            params = pika.ConnectionParameters(host=mq_host)
+            strategy = pika.reconnection_strategies.SimpleReconnectionStrategy()
+                
+            connection = pika.BlockingConnection(params, strategy)
+                
+            self.channel = connection.channel()
+            self.channel.queue_declare(queue=Worker.DROPLET_QUEUE, durable=True)
+        except socket.error, msg:
+            log.error("Error connecting StreamListener to the MQ. Retrying...")
+        except pika.exceptions.ChannelClosed, e:
+            log.error("StreamListener lost connection to the MQ, reconnecting")
         
         search_string = drop_dict['droplet_content']
         for t in predicates:
@@ -66,24 +79,14 @@ class FilterPredicateMatchWorker():
         if len(river_ids) > 0:
             # Log
             log.debug("Droplet content: %s, Rivers: %s" 
-                      % (self.drop_dict['droplet_content'], river_ids))
+                      % (self.drop_dict['droplet_content'], set(river_ids)))
             
-            # Attempt publishing the droplet
-            try:
-                self.drop_dict['river_id'] = river_ids
+            self.drop_dict['river_id'] = list(set(river_ids))
                 
-                # Don't wait for acknwoledgement from the consumer - causes a 
-                # TCP BackPressure warning as a result of the broker using up
-                # more than the allocated memory - 40% of installed RAM
-                self.channel.basic_publish(exchange='', 
-                                           routing_key=Worker.DROPLET_QUEUE,
-                                           body=json.dumps(self.drop_dict))
-            except pika.exceptions.AMQPConnectionError, msg:
-                # Log warnings
-                log.error("Failed to submit drop to the Droplet Queue: %s" % msg)
-            except Exception, msg:
-                # Catch any other unhandled exception
-                log.exception(msg)
+            self.channel.basic_publish(exchange='', 
+                                       routing_key=Worker.DROPLET_QUEUE,
+                                       properties=pika.BasicProperties(delivery_mode=2),
+                                       body=json.dumps(self.drop_dict))
         
 
 class TwitterFirehoseWorker(Worker):
@@ -102,7 +105,7 @@ class TwitterFirehoseWorker(Worker):
         self.auth.set_access_token(options.get('token_key'), 
                                      options.get('token_secret'))
         
-        self.predicates = []
+        self.predicates = {}
         
         self.firehose_running = False
         self.firehose_stream = None
@@ -112,10 +115,8 @@ class TwitterFirehoseWorker(Worker):
         self.__reconnect_stream = None
         self.__reconnect_listener = None
     
-    def firehose_reconnect():
+    def firehose_reconnect(self):
         """Reconnects to the firehose"""
-        
-        log.info("Reconnecting to the firehose with the updated filter predicates")
         
         self.__reconnect_listener = FirehoseStreamListener(self.mq_host, 
                                                          self.predicates, self)
@@ -123,11 +124,15 @@ class TwitterFirehoseWorker(Worker):
         t = self.__get_filter_predicates(self.predicates)
         self.follow, self.track = t[0], t[1]
         
+        log.info("Reconnecting with updated filter predicates %r %r" 
+                 % (t[0], t[1]))
+        
         self.__reconnect_stream = Stream(self.auth, self.__reconnect_listener, secure=True)
         self.__reconnect_stream.filter(self.follow, self.track, True)
 
     def disconnect_firehose(self):
         """ Disconnects from the current firehose stream"""
+        log.info("Disconnecting old firehose stream...")
         self.firehose_stream.disconnect()
         self.firehose_stream = self.__reconnect_stream
         self.stream_listener = self.__reconnect_listener
@@ -141,7 +146,7 @@ class TwitterFirehoseWorker(Worker):
         
         stream_listener = None
         if not self.firehose_running:
-            self.predicates = predicates
+            self.predicates = dict(predicates)
             self.stream_listener = FirehoseStreamListener(self.mq_host, predicates)
 
         # Initialize twitter streaming 
@@ -195,7 +200,7 @@ class TwitterFirehoseWorker(Worker):
                     try:
                         d = self.predicates[k][p]
                         self.predicates[k][p] = list(set(d.extend(r)))
-                    except KeyErrorr:
+                    except KeyError:
                         self.predicates[k] = {p: r}
             
             # Reconnect to the firehose with the updated predicates
@@ -224,24 +229,10 @@ class FirehoseStreamListener(StreamListener):
     def __init__(self, mq_host, predicates, firehose_worker=None):
         StreamListener.__init__(self)
         
-        self.channel = None
-        
-        # Attempt reconnection until we're successful
-        while self.channel is None:
-            try:
-                connection = pika.BlockingConnection(pika.ConnectionParameters(host=mq_host), 
-                                                     pika.reconnection_strategies.SimpleReconnectionStrategy())
-                self.channel = connection.channel()
-                self.channel.queue_declare(queue=Worker.DROPLET_QUEUE, durable=True)
-            except socket.error, msg:
-                log.error("Error connecting StreamListener to the MQ. Retrying...")
-                time.sleep(60)
-            except pika.exceptions.ChannelClosed, e:
-                log.error("StreamListener lost connection to the MQ, reconnecting")
-                time.sleep(60)
+        self.mq_host = mq_host
         
         self.__firehose_worker = firehose_worker
-        self.__predicate_dict = predicates
+        self.__predicate_dict = dict(predicates)
         
         # Flatten the fiter predicates
         self.__predicate_list = utils.flatten_filter_predicates(predicates)
@@ -253,7 +244,7 @@ class FirehoseStreamListener(StreamListener):
         """
         
         # NOTE: Duplicate river_ids will be filtered out by the flattening step
-        for k, v in updated:
+        for k, v in updated.iteritems():
             for p, r in v.iteritems():
                 # Compute diff of river ids and extend by the result
                 try:
@@ -274,8 +265,8 @@ class FirehoseStreamListener(StreamListener):
                # Disconnect the current firehose connection and kill
                # reference to the firehose worker thread
                log.info("Disconnecting current firehose connection...")
-               self.firehose_worker.disconnect_firehose()
-               self.firehose_worker = None
+               self.__firehose_worker.disconnect_firehose()
+               self.__firehose_worker = None
            
            payload = json.loads(data)
            
@@ -296,8 +287,9 @@ class FirehoseStreamListener(StreamListener):
                         }
            
            # Spawn a predicate match worker
-           worker = FilterPredicateMatchWorker(self.channel, self.__predicate_list, 
-                                               drop_dict)
+           worker = FilterPredicateMatcher(self.mq_host, 
+                                           self.__predicate_list, 
+                                           drop_dict)
            
            Thread(target=worker.run).start()
            
@@ -333,8 +325,9 @@ class FirehoseStreamListener(StreamListener):
 
     def on_timeout(self):
         """Called when stream connection times out"""
-        return 
+        return
 
+        
 
 class TwitterFirehoseDaemon(Daemon):
     
