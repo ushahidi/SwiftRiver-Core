@@ -101,6 +101,7 @@ class LinkExtractorQueueWorker(Worker):
                                     delivery_mode = 2, # make message persistent
                               ),
                               body=json.dumps(droplet))
+        droplet_channel.close()
                 
         # Confirm delivery only once droplet has been passed
         # for metadata extraction

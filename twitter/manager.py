@@ -130,6 +130,7 @@ class TwitterFirehoseManager:
                 channel.basic_publish(exchange = '', 
                                       routing_key=utils.FIREHOSE_QUEUE,
                                       body=message)
+                channel.close()
 
 
     def __sanitize_filter_predicate(self, filter_predicate, update_target, river_id):
@@ -219,6 +220,7 @@ class TwitterFirehoseManager:
                     channel.basic_publish(exchange='', 
                                           routing_key=utils.FIREHOSE_QUEUE,
                                           body=message)
+                    channel.close()
                     
                     self.__predicates_changed = False
                 

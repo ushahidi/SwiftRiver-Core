@@ -65,6 +65,7 @@ class DropletQueueWorker(Worker):
                                         delivery_mode = 2, # make message persistent
                                   ),
                                   body=content)
+            meta_channel.close()
                                   
         # Confirm delivery only once droplet has been passed
         # for metadata extraction
