@@ -96,7 +96,6 @@ class FilterPredicateMatcher(Thread):
                                        routing_key=Worker.DROPLET_QUEUE,
                                        properties=pika.BasicProperties(delivery_mode=2),
                                        body=json.dumps(self.drop_dict))
-            # Cleanup
             self.channel.close()
         
         
