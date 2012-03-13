@@ -70,17 +70,17 @@ class SemanticsQueueWorker(Worker):
             if response.get('status') == 'OK':
                 semantics = response['results']
                 
-                if semantics.has_key('gpe'):
-                    droplet['places'] = []
-                    for place in semantics['gpe']:
-                        droplet['places'].append({
-                            'place_name': place['place_name'],
-                            'latitude': place['coordinates']['latitude'],
-                            'longitude': place['coordinates']['longitude'],
-                            'source': 'gisgraphy'
-                        })
-                    # Remove gpe items and return the rest as tags
-                    del(semantics['gpe'])
+                #if semantics.has_key('gpe'):
+                #    droplet['places'] = []
+                #    for place in semantics['gpe']:
+                #        droplet['places'].append({
+                #            'place_name': place['place_name'],
+                #            'latitude': place['coordinates']['latitude'],
+                #            'longitude': place['coordinates']['longitude'],
+                #            'source': 'gisgraphy'
+                #        })
+                #    # Remove gpe items and return the rest as tags
+                #    del(semantics['gpe'])
                 
                 
                 for k, v in semantics.iteritems():
