@@ -140,7 +140,9 @@ class RssFetcherWorker(Worker):
             response_channel.basic_publish(exchange='',
                                   routing_key=self.SHEDULER_RESPONSE_QUEUE,
                                   body=message_body)
+            response_channel.close()
         
+        droplet_channel.close()
         ch.basic_ack(delivery_tag = method.delivery_tag)
         log.info(" %s done fetching %s" % (self.name, message['url']))
         

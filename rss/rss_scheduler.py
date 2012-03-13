@@ -200,6 +200,7 @@ class RssFetchScheduler:
                                                   routing_key=self.FETCHER_QUEUE,
                                                   body=message)
                         
+                    channel.close()
                     time.sleep(5)
             except socket.error, msg:
                 log.error(" scheduler error connecting to the MQ, retrying")
@@ -239,6 +240,7 @@ class RssFetchScheduler:
             channel.basic_publish(exchange='',
                                   routing_key=self.FETCHER_QUEUE,
                                   body=message)
+            channel.close()
       
     def del_url(self, name, mq, channel_option):
         url = json.loads(channel_option['value'])['value'];
