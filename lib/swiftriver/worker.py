@@ -68,10 +68,14 @@ class Worker(Thread):
                 worker_channel.start_consuming()
             except socket.error, msg:
                 log.error("%s error connecting to the MQ: %s. Retrying..." % (self.name, msg))
+                time.sleep(30)
             except pika.exceptions.AMQPConnectionError, e:
                 log.error("%s lost connection to the MQ, reconnecting" % self.name)
                 log.exception(e)
                 time.sleep(60)
+        
+        # Close the channel when done
+        worker_channel.close()
   
     def get_cursor(self):
         """Get a db connection and attempt reconnection"""

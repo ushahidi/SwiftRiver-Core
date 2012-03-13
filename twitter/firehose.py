@@ -57,11 +57,11 @@ class FilterPredicateMatcher(Thread):
         try:
             params = pika.ConnectionParameters(host=mq_host)
             strategy = pika.reconnection_strategies.SimpleReconnectionStrategy()
-                
+                    
             connection = pika.BlockingConnection(params, strategy)
-                
-            self.channel = connection.channel()
-            self.channel.queue_declare(queue=Worker.DROPLET_QUEUE, durable=True)
+                    
+            self._channel = connection.channel()
+            self._channel.queue_declare(queue=Worker.DROPLET_QUEUE, durable=True)
         except socket.error, msg:
             log.error("Error connecting predicate matcher to the MQ. %s" % msg)
         except pika.exceptions.ChannelClosed, e:
@@ -77,12 +77,18 @@ class FilterPredicateMatcher(Thread):
         
     def run(self):
         # Get a pool of processes as many as the cores in the system
+        if self._channel is None:
+            return
+        
         pool = Pool()
         river_ids = pool.map(predicate_match, self.predicates)
         
         # Terminate the workers
         pool.close()
         pool.join()
+        
+        # Just to be sure
+        pool.terminate()
         
         # Flatten the river ids into a set
         river_ids = list(itertools.chain(*river_ids))
@@ -93,14 +99,15 @@ class FilterPredicateMatcher(Thread):
             
             self.drop_dict['river_id'] = list(set(river_ids))
                 
-            self.channel.basic_publish(exchange='', 
+            self._channel.basic_publish(exchange='', 
                                        routing_key=Worker.DROPLET_QUEUE,
                                        properties=pika.BasicProperties(delivery_mode=2),
                                        body=json.dumps(self.drop_dict))
-        self.channel.close()
         
+        # Close the channel and connection
+        self._channel.close()
+    
         
-
 class TwitterFirehoseWorker(Worker):
     """
     Worker to bootstrap the firehose and handle reconnection when new 
@@ -120,10 +127,10 @@ class TwitterFirehoseWorker(Worker):
         self.auth = {}
 
         # Verify and load the oAuth params        
-        if self.__verify_oauth_params(track_auth):
+        if self.__verify_auth_params(track_auth):
             self.auth['track'] = self.__load_auth_config(track_auth)
         
-        if self.__verify_oauth_params(follow_auth):
+        if self.__verify_auth_params(follow_auth):
             self.auth['follow'] = self.__load_auth_config(follow_auth)        
         
         # Internal predicate registry
@@ -140,7 +147,7 @@ class TwitterFirehoseWorker(Worker):
         self.__reconnect_streams = {'track': None, 'follow': None}
         self.__reconnect_listeners = {'track': None, 'follow': None}
     
-    def __verify_oauth_params(self, params):
+    def __verify_auth_params(self, params):
         """ Verifies all the OAuth params are present"""
         if (params.get('consumer_key') is not None 
             and params.get('consumer_secret') is not None
