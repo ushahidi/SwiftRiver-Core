@@ -6,7 +6,15 @@ num_workers=10
 log_level=DEBUG
 mq_host=localhost
 
-[twitter_api]
+# OAuth settings for track predicates
+[track_twitter_api]
+consumer_key=
+consumer_secret=
+token_key=
+token_secret=
+
+# OAuth settings for follow predicates
+[follow_twitter_api]
 consumer_key=
 consumer_secret=
 token_key=
