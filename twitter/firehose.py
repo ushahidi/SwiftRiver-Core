@@ -49,6 +49,8 @@ class FilterPredicateMatcher(Thread):
     
     def __init__(self, mq_host, predicates, drop_dict):
         Thread.__init__(self)
+        
+        # Internal predicate registry
         self.predicates = []
         
         # Attempt to get a connection
@@ -107,44 +109,77 @@ class TwitterFirehoseWorker(Worker):
     def __init__(self, name, mq_host, queue, options=None):
         Worker.__init__(self, name, mq_host, queue, options)
         
-        # Setup oAuth
-        self.auth = OAuthHandler(options.get('consumer_key'), 
-                                   options.get('consumer_secret'))
+        track_auth = options.get('track_auth')
+        follow_auth = options.get('follow_auth')
         
-        self.auth.set_access_token(options.get('token_key'), 
-                                     options.get('token_secret'))
+        self.auth = {}
         
+        # OAuth for track predicates
+        auth_track = OAuthHandler(track_auth.get('consumer_key'), 
+                                  track_auth.get('consumer_secret'))
+        
+        auth_track.set_access_token(track_auth.get('token_key'), 
+                                    track_auth.get('token_secret'))
+        self.auth['track'] = auth_track 
+        
+        # OAuth for follow predicates
+        auth_follow = OAuthHandler(follow_auth.get('consumer_key'), 
+                                   follow_auth.get('consumer_secret'))
+        
+        auth_follow.set_access_token(follow_auth.get('token_key'), 
+                                     follow_auth.get('token_secret'))
+        
+        self.auth['follow'] = auth_follow
+        
+        # Internal predicate registry
         self.predicates = {}
         
-        self.firehose_running = False
-        self.firehose_stream = None
-        self.stream_listener = None
+        self.listeners = {'track': None, 'follow': None}
+        self.streams = {'track': None, 'follow': None}
+        
+        # Tracks the status of the track and follow firehose streams
+        self.track_firehose_running = False
+        self.follow_firehose_running = False
         
         # Firehose reconnection stream and listener references  
-        self.__reconnect_stream = None
-        self.__reconnect_listener = None
+        self.__reconnect_streams = {'track': None, 'follow': None}
+        self.__reconnect_listeners = {'track': None, 'follow': None}
     
     def firehose_reconnect(self):
         """Reconnects to the firehose"""
         
-        self.__reconnect_listener = FirehoseStreamListener(self.mq_host, 
-                                                         self.predicates, self)
-        
         t = self.__get_filter_predicates(self.predicates)
-        self.follow, self.track = t[0], t[1]
-        
-        log.info("Reconnecting with updated filter predicates %r %r" 
-                 % (t[0], t[1]))
-        
-        self.__reconnect_stream = Stream(self.auth, self.__reconnect_listener, secure=True)
-        self.__reconnect_stream.filter(self.follow, self.track, True)
+        self.track, self.follow = t[0], t[1]
 
-    def disconnect_firehose(self):
-        """ Disconnects from the current firehose stream"""
-        log.info("Disconnecting old firehose stream...")
-        self.firehose_stream.disconnect()
-        self.firehose_stream = self.__reconnect_stream
-        self.stream_listener = self.__reconnect_listener
+        if self.track is not None:
+            log.info("Reconnecting with updated track predicates: %r" % t[0])
+
+            self.__init_firehose('track', self.predicates, True)
+            self.__reconnect_streams['track'].filter(None, self.track, True)
+
+        # Reconnect                     
+        if self.follow is not None:
+            log.info("Reconnecting with updated follow predicates: %r" % t[1])
+
+            self.__init_firehose('follow', self.predicates, True)
+            self.__reconnect_streams['follow'].filter(self.follow, None, True)
+        
+        
+    def disconnect_firehose(self, predicate_type):
+        """ Given a predicate type , disconnects its current 
+        firehose stream"""
+        
+        log.info("Disconnecting old %s predicate firehose stream" % predicate_type)
+        self.streams[predicate_type].disconnect()
+        
+        # Set the active streams and listeners
+        self.listeners[predicate_type] = self.__reconnect_listeners[predicate_type]
+        self.streams[predicate_type] = self.__reconnect_streams[predicate_type]
+        
+        # Destroy the reconnect references
+        self.__reconnect_listeners[predicate_type] = None
+        self.__reconnect_streams[predicate_type] = None
+        
             
     def handle_mq_response(self, ch, method, properties, body):
         """Overrides Worker.handle_mq_response"""
@@ -152,36 +187,82 @@ class TwitterFirehoseWorker(Worker):
         # Get the items to place on the firehose
         predicates = json.loads(body)
         log.info("Received filter predicates for the firehose")
-        
-        stream_listener = None
-        if not self.firehose_running:
-            self.predicates = dict(predicates)
-            self.stream_listener = FirehoseStreamListener(self.mq_host, predicates)
 
-        # Initialize twitter streaming 
-        firehose_stream = None
-        if not self.firehose_running:
-            self.firehose_running = True
-            self.firehose_stream = Stream(self.auth, self.stream_listener, secure=True)
+        t = ()
+        
+        # Check for existing predicates
+        if len(self.predicates) == 0:
+            # Initialize internal predicate registry
+            self.predicates = dict(predicates)
             
             # Get the list of keywords to track and people to follow
             t = self.__get_filter_predicates(predicates)
-            self.follow, self.track = t[0], t[1]
+
+        # Check the stream for track predicates
+        if not self.track_firehose_running and t[0] is not None:
+            self.track_firehose_running = True
+            self.track = t[0]
             
-            log.debug("Keywords to track %r" % self.track)
-            log.debug("People to follow %r" % self.follow)
+            # Initialize the firehose
+            self.__init_firehose('track', predicates)
             
             # Start the firehose filter
-            log.info("Initializing Twitter Streaming")
-            self.firehose_stream.filter(self.follow, self.track, True)
-        else:
-            # A connection to the firehose exists
-            # Update tracking predicates
+            log.info("Initializing streaming of track predicates: %r" % t[0])
+            track_stream = self.streams['track']
+            track_stream.filter(None, self.track, True)
+            
+
+        # Check the stream for follow predicates        
+        if not self.follow_firehose_running and t[1] is not None:
+            self.follow_firehose_running = True
+            self.follow = t[1]
+            
+            self.__init_firehose('follow', predicates)
+            
+            # Start the firehose filter
+            log.info("Initializing streaming of follow predicates: %r" % t[1])
+            follow_stream = self.streams['follow']
+            follow_stream.filter(self.follow, None, True)
+        
+        # If either of the streams is running, update predicates
+        if self.follow_firehose_running or self.track_firehose_running:
+            # Update the filter predicates
             self.__update_filter_predicates(predicates)
         
         #Acknowledge delivery
         ch.basic_ack(delivery_tag = method.delivery_tag)
     
+    
+    def __init_firehose(self, predicate_type, predicates, reconnect=False):
+        """Initializes a stream listener and its associated firehose
+        stream connection"""
+        
+        # Firehose worker reference to be passed to the stream listener
+        # Only set if reconnect = True
+        firehose_worker = self if reconnect else None
+        
+        # Get the track predicates
+        track_predicates = dict({
+                                 predicate_type: predicates.get(predicate_type)
+                                 })
+        
+        # Listener for the specific predicate
+        listener = FirehoseStreamListener(self.mq_host, track_predicates, 
+                                          firehose_worker, predicate_type)
+        
+        # Stream for the predicate type
+        stream = Stream(self.auth[predicate_type], 
+                        listener, 
+                        secure=True)
+
+        if reconnect:
+            self.__reconnect_listeners[predicate_type] = listener
+            self.__reconnect_streams[predicate_type] = stream
+        else:
+            self.listeners[predicate_type] = listener
+            self.streams[predicate_type] = stream
+               
+        
     def __update_filter_predicates(self, predicates):
         """Gets the diff between the current set of predicates
         and the newly submitted set  
@@ -189,8 +270,8 @@ class TwitterFirehoseWorker(Worker):
         # Get the new follow and track predicates
         t = self.__get_filter_predicates(predicates)
 
-        follow = None if t[0] is None else t[0]
-        track = None if t[1] is None else t[1]
+        track = None if t[0] is None else t[0]
+        follow = None if t[1] is None else t[1]
         
         # Compute the follow diff
         follow_diff = []
@@ -216,7 +297,7 @@ class TwitterFirehoseWorker(Worker):
             self.firehose_reconnect()
         elif len(track_diff) == 0 and len(follow_diff) == 0:
             # Check for river id updates
-            self.stream_listener.update_predicate_river_ids(predicates)
+            pass
         
     def __get_filter_predicates(self, predicates):
         """Given a dictionary of predicates, returns lists
@@ -229,18 +310,20 @@ class TwitterFirehoseWorker(Worker):
         follow = (predicates.get('follow').keys() 
                   if predicates.has_key('follow') else None)
         
-        return follow, track        
+        return track, follow        
 
 
 class FirehoseStreamListener(StreamListener):
     """Firehose stream listener for processing incoming firehose data"""
     
-    def __init__(self, mq_host, predicates, firehose_worker=None):
+    def __init__(self, mq_host, predicates, firehose_worker=None, predicate_type=None):
         StreamListener.__init__(self)
         
         self.mq_host = mq_host
         
         self.__firehose_worker = firehose_worker
+        self.__predicate_type = predicate_type
+        
         self.__predicate_dict = dict(predicates)
         
         # Flatten the fiter predicates
@@ -274,7 +357,7 @@ class FirehoseStreamListener(StreamListener):
                # Disconnect the current firehose connection and kill
                # reference to the firehose worker thread
                log.info("Disconnecting current firehose connection...")
-               self.__firehose_worker.disconnect_firehose()
+               self.__firehose_worker.disconnect_firehose(self.__predicate_type)
                self.__firehose_worker = None
            
            payload = json.loads(data)
@@ -341,7 +424,12 @@ class TwitterFirehoseDaemon(Daemon):
         Daemon.__init__(self, pidfile, stdout, stdout, stdout)
         
         self.__mq_host = options.get('mq_host')
-        self.__options = options.get('auth')
+        
+        # Auth settings for the track and filter predicates respectively
+        self.__options = {
+                          'track_auth':options.get('track_auth'), 
+                          'follow_auth':options.get('follow_auth')
+                          }
         
     def run(self):
         try:
@@ -377,12 +465,23 @@ if __name__ == '__main__':
         stdout = config.get('main', 'out_file')
         
         # Daemon options
-        options = {'mq_host': config.get('main', 'mq_host'),
-                   'auth': {
-                            'consumer_key': config.get('twitter_api', 'consumer_key'),
-                            'consumer_secret': config.get('twitter_api', 'consumer_secret'),
-                            'token_key': config.get('twitter_api', 'token_key'),
-                            'token_secret': config.get('twitter_api', 'token_secret')
+        options = {
+                   'mq_host': config.get('main', 'mq_host'),
+                   
+                   # OAuth settings for exclusive use of track predicates
+                   'track_auth': {
+                            'consumer_key': config.get('track_twitter_api', 'consumer_key'),
+                            'consumer_secret': config.get('track_twitter_api', 'consumer_secret'),
+                            'token_key': config.get('track_twitter_api', 'token_key'),
+                            'token_secret': config.get('track_twitter_api', 'token_secret')
+                            },
+                    
+                    # OAuth settings for exclusive use of follow predicates
+                   'follow_auth': {
+                            'consumer_key': config.get('follow_twitter_api', 'consumer_key'),
+                            'consumer_secret': config.get('follow_twitter_api', 'consumer_secret'),
+                            'token_key': config.get('follow_twitter_api', 'token_key'),
+                            'token_secret': config.get('follow_twitter_api', 'token_secret')
                             }
                    }
         
