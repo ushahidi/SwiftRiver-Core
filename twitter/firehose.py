@@ -52,6 +52,7 @@ class FilterPredicateMatcher(Thread):
         
         # Internal predicate registry
         self.predicates = []
+        self._channel = None
         
         # Attempt to get a connection
         try:
@@ -92,12 +93,13 @@ class FilterPredicateMatcher(Thread):
         
         # Flatten the river ids into a set
         river_ids = list(itertools.chain(*river_ids))
+        river_ids = list(set(river_ids))
         if len(river_ids) > 0:
             # Log
             log.debug("Droplet content: %s, Rivers: %s" 
-                      % (self.drop_dict['droplet_content'], set(river_ids)))
+                      % (self.drop_dict['droplet_content'], river_ids))
             
-            self.drop_dict['river_id'] = list(set(river_ids))
+            self.drop_dict['river_id'] = river_ids
                 
             self._channel.basic_publish(exchange='', 
                                        routing_key=Worker.DROPLET_QUEUE,
