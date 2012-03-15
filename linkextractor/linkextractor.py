@@ -39,14 +39,14 @@ class LinkExtractorQueueWorker(Worker):
         log.info(" %s droplet received with id %d" % (self.name, droplet.get('id', 0)))
         
         # Strip tags leaving only hyperlinks
-        droplet_raw = re.sub(r'<(?!\s*[aA]\s*)[^>]*?>', '', droplet['droplet_raw'])
+        droplet_raw = re.sub(r'<(?!\s*[aA]\s*)[^>]*?>', '', droplet['droplet_raw']).strip().encode('ascii', 'ignore')
         
         # Extract the href from hyperlinks since the regex above expects a space character
         # at the end of the url
         droplet_raw = re.sub(r'(?i)<(?=\s*[a]\s+)[^>]*href\s*=\s*"([^"]*)"[^>]*?>', ' \\1 ', droplet_raw)
         
         
-        for link in re.findall(r'(?:https?://[^\\s]+)', droplet_raw):
+        for link in re.findall("(?:https?://[^\\s]+)", droplet_raw):
             if not droplet.has_key('links'):
                 droplet['links'] = []
 
