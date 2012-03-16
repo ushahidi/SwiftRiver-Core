@@ -62,76 +62,82 @@ class TwitterFirehoseManager:
     def add_filter_predicate(self, mq, payload):
         """ Adds a filter predicate to the firehose """
         
-        # Acquire lock and proceed
-        with self.__lock:
-            # Grab essential data
-            predicate_type = "follow" if payload['key'].lower() == "person" else "track"
-            filter_predicate = json.loads(payload['value'])['value']
-            river_id = payload['river_id']
+        # Grab essential data
+        predicate_type = self.__get_predicate_type(payload['key'])
+        filter_predicate = json.loads(payload['value'])['value']
+        river_id = payload['river_id']
             
-            # Get the update target
-            update_target = self.__predicates.get(predicate_type, dict())
-            current_target = dict(update_target)
+        # Get the update target
+        update_target = self.__predicates.get(predicate_type, dict())
+        current_target = dict(update_target)
             
-            # Check for filter predicate limits
-            if not utils.allow_filter_predicate(self.__predicates, predicate_type):
-                log.info("The maximum no. of %s predicates allowed has been reached." 
-                         % predicate_type)
-                return
+        # Check for filter predicate limits
+        if not utils.allow_filter_predicate(self.__predicates, predicate_type):
+            log.info("The maximum no. of %s predicates allowed has been reached." 
+                     % predicate_type)
+            return
             
-            # Proceed
-            self.__sanitize_filter_predicate(filter_predicate, update_target, river_id)
+        # Proceed
+        self.__sanitize_filter_predicate(filter_predicate, 
+                                         update_target, river_id)
             
-            # set-list conversion
-            for k, v in update_target.iteritems(): update_target[k] = list(v)
+        # set-list conversion
+        for k, v in update_target.iteritems(): update_target[k] = list(v)
             
-            # Update internal list of predicates
-            self.__predicates[predicate_type] = update_target
+        # Update internal list of predicates
+        self.__predicates[predicate_type] = update_target
             
-            publish_data = {}
-            if len(current_target) == 0:
-                # Predicate type was non-existent before sanitization, 
-                # ignore diff compute
-                publish_data[predicate_type] = update_target
-            else:
-                # Predicate type existing prior to sanitization, compute diff
-                new_predicates = list(set(update_target.keys()) - 
-                                      set(current_target.keys()))
+        publish_data = {}
+        if len(current_target) == 0:
+            # Predicate type was non-existent before sanitization, 
+            # ignore diff compute
+            publish_data[predicate_type] = update_target
+        else:
+            # Predicate type existing prior to sanitization, compute diff
+            new_predicates = list(set(update_target.keys()) - 
+                                  set(current_target.keys()))
                 
-                # Check for new predicates                
-                if len(new_predicates) > 0:
-                    publish_data[predicate_type] = {}
-                    k = map(lambda x: dict({x:[river_id]}), new_predicates)
-                    for v in k: publish_data[predicate_type].update(v)
-                elif len(new_predicates) == 0:
-                    # No new filter predicates, check for rivers update for each predicate
-                    publish_data[predicate_type] = {}
+            # Check for new predicates                
+            if len(new_predicates) > 0:
+                publish_data[predicate_type] = {}
+                k = map(lambda x: dict({x:[river_id]}), new_predicates)
+                for v in k: publish_data[predicate_type].update(v)
+            elif len(new_predicates) == 0:
+                # No new filter predicates, check for rivers update for each predicate
+                publish_data[predicate_type] = {}
                     
-                    for k,v in update_target.iteritems():
-                        # Get the rivers associated with the current list of rivers
-                        g = current_target[k]
-                        rivers_diff = list(set(v) - set(g))
-                        if len(rivers_diff) > 0:
-                            publish_data[predicate_type].update({k: rivers_diff})
+                for k,v in update_target.iteritems():
+                    # Get the rivers associated with the current list of rivers
+                    g = current_target[k]
+                    rivers_diff = list(set(v) - set(g))
+                    if len(rivers_diff) > 0:
+                        publish_data[predicate_type].update({k: rivers_diff})
                     
-                    # Verify that there's data to be published
-                    if len(publish_data[predicate_type]) == 0: publish_data = {}
+                # Verify that there's data to be published
+                if len(publish_data[predicate_type]) == 0: publish_data = {}
                 
-            # Check if there's any data to be published            
-            if len(publish_data) > 0:
-                log.debug("Publishing %r to the firehose" % publish_data)
+        # Check if there's any data to be published            
+        if len(publish_data) > 0:
+            log.debug("Publishing new predicates to the firehose %r" 
+                      % publish_data)
                 
-                # Construct the message to sent out to the process consuming the firehose
-                message = json.dumps(publish_data)
+            # Construct the message to sent out to the process consuming the firehose
+            message = json.dumps(publish_data)
                         
-                # Publish the new predicate to the Firehose
-                channel = mq.channel()
-                channel.queue_declare(queue=utils.FIREHOSE_QUEUE, durable=False)
-                channel.basic_publish(exchange = '', 
-                                      routing_key=utils.FIREHOSE_QUEUE,
-                                      body=message)
-                channel.close()
+            # Publish the new predicate to the Firehose
+            channel = mq.channel()
+            channel.queue_declare(queue=utils.FIREHOSE_QUEUE, durable=False)
+            channel.basic_publish(exchange = '', 
+                                  routing_key=utils.FIREHOSE_QUEUE,
+                                  body=message)
+            channel.close()
+            
 
+    def __get_predicate_type(self, payload_key):
+        """ Given the payload key, returns the predicate type"""
+        
+        return "follow" if payload_key.lower() == "person" else "track"
+    
 
     def __sanitize_filter_predicate(self, filter_predicate, update_target, river_id):
         """Given a filter predicate, splits it, removes '#' and '@'
@@ -151,16 +157,61 @@ class TwitterFirehoseManager:
             
             if not update_target.has_key(term):
                 update_target[term] = set()
-                
+            else:
+                L = set(update_target[term])
+                update_target[term] = L
+
             # Store the river id with that item 
             update_target[term].add(river_id)
             
             
-    def delete_filter_predicate(self, payload):
+    def delete_filter_predicate(self, mq, payload):
         # Remove the predicate from the internal cache and from 
         # firehose predicates list
-        pass
+        predicate_key =  self.__get_predicate_type(payload['key'])
+        filter_predicate = json.loads(payload['value'])['value']
+        river_id = payload['river_id']
 
+        delete_items = {}
+        self.__sanitize_filter_predicate(filter_predicate, delete_items, river_id)
+        
+        # Get the current set of predicates from memory 
+        current_predicates = self.__predicates.get(predicate_key, dict())
+            
+        # Nothing to delete
+        if len(current_predicates) == 0:
+            return
+            
+        # Delete
+        for k, v in delete_items.iteritems():
+            # Get the rivers
+            rivers = set(current_predicates.get(k, []))
+            if len(rivers) > 0:
+                rivers -= v
+                
+                if len(rivers) == 0:
+                    # No rivers for that predicate, remove it
+                    del current_predicates[k]
+                else:
+                    current_predicates[k] = list(rivers)
+                
+            
+        log.info("Deleted filter predicate %s from river %s" 
+                 % (filter_predicate, river_id))
+            
+        self.__predicates[predicate_key].update(current_predicates)
+            
+        # Notify the firehose worker of the change
+        log.info("New filter predicates: %r" % self.__predicates)
+        message = json.dumps({'message': 'replace', 'data':self.__predicates})
+                        
+        # Publish the new predicate to the Firehose
+        channel = mq.channel()
+        channel.queue_declare(queue=utils.FIREHOSE_QUEUE, durable=False)
+        channel.basic_publish(exchange = '', 
+                              routing_key=utils.FIREHOSE_QUEUE,
+                              body=message)
+        channel.close()
     
     def __get_firehose_predicates(self):
         """Gets all the twitter channel options and classifies them
@@ -177,7 +228,7 @@ class TwitterFirehoseManager:
         
         predicates = {}
         for river_id, key, value in c.fetchall():
-            predicate_key = 'track' if key.lower() == 'keyword' else 'follow'
+            predicate_key = self.__get_predicate_type(key)
             
             if not predicates.has_key(predicate_key):
                 predicates[predicate_key] = {}
@@ -241,7 +292,8 @@ class TwitterFirehoseManager:
         # Spawn a set of workers to listen for predicate updates
         worker_options = {'exchange_name': 'chatter', 
                           'exchange_type': 'topic', 
-                          'routing_key': 'web.channel_option.twitter.*'
+                          'routing_key': 'web.channel_option.twitter.*',
+                          'firehose_manager': self
         }
         for x in range(self.__predicate_workers):
             # Generate the worker name
@@ -251,7 +303,6 @@ class TwitterFirehoseManager:
             worker = TwitterPredicateUpdateWorker(worker_name, self.__mq_host, 
                                          utils.TWITTER_UPDATE_QUEUE, 
                                          worker_options)
-            worker.set_firehose_manager(self)
             worker.start()
             
         # Get all the predicates from the database
@@ -271,27 +322,25 @@ class TwitterPredicateUpdateWorker(Worker):
         
     def __init__(self, name, mq_host, queue, options=None):
         Worker.__init__(self, name, mq_host, queue, options)
-        self.__firehose_manager = None
-    
-    def set_firehose_manager(self, manager):
-        """Sets the firehose manager reference"""
-        self.__firehose_manager = manager
+        self.__firehose_manager = options.get('firehose_manager')
         
     def handle_mq_response(self, ch, method, properties, body):
         try:
             payload = json.loads(body)
             # Add predicates
             if method.routing_key == "web.channel_option.twitter.add":
+                log.info("Add new twitter predicate...")
                 self.__firehose_manager.add_filter_predicate(self.mq, payload)
             
             # Delete predicates
             if method.routing_key == "web.channel_option.twitter.delete":
-                log.info("Firehose filter predicate removed %s" % payload['value'])
-                self.__firehose_manager.delete_filter_predicate(payload)
+                log.info("Deleting twitter predicate...")
+                self.__firehose_manager.delete_filter_predicate(self.mq, payload)
                 
         except Exception, e:
             log.info(e)
             log.exception(e)
+            ch.basic_ack(delivery_tag=method.delivery_tag)
         
         ch.basic_ack(delivery_tag=method.delivery_tag)
 
