@@ -30,14 +30,16 @@ def predicate_match(L):
     search_pattern = L[0].split(" ")
         
     if len(search_pattern) == 1:
-        return [] if re.search(L[0], L[2], re.IGNORECASE) is None else L[1]
+        pattern = "\\b"+L[0]+"\\b"
+        return [] if re.search(pattern, L[2], re.IGNORECASE) is None else L[1]
     elif len(search_pattern) > 1:
         # Returns the river ids if each element in the pattern is 
         # in the search string
         
         found = False
         
-        for pattern in search_pattern:
+        for p in search_pattern:
+            pattern = "\\b"+p+"\\b"
             found = (False if re.search(pattern, L[2], re.IGNORECASE) 
                      is None else True)
         
@@ -200,7 +202,8 @@ class TwitterFirehoseWorker(Worker):
         log.info("Disconnecting old %s predicate firehose stream" 
                  % predicate_type)
         
-        self.streams[predicate_type].disconnect()
+        s = self.streams[predicate_type]
+        s.disconnect()
         
         # Set the active streams and listeners
         self.listeners[predicate_type] = self.__reconnect_listeners[predicate_type]
