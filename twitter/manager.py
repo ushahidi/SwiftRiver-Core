@@ -144,16 +144,12 @@ class TwitterFirehoseManager:
         and pushes it to the specified target"""
         
         for term in filter_predicate.split(","):
-            term = term.strip();
+            term = term.lower().strip();
             
             # As per the streaming API guidelines, terms should be 60 chars
             # long at most
             if  len(term) > 60:
                 continue
-            
-            # Remove '#' and '@' from the filter predicates
-            term = term[1:] if term[:1] == '@' else term
-            term = term[1:] if term[:1] == '#' else term
             
             if not update_target.has_key(term):
                 update_target[term] = set()
