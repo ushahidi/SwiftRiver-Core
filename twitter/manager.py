@@ -53,8 +53,8 @@ class TwitterFirehoseManager:
                                                         
                 self.__db.ping(True)
                 cursor = self.__db.cursor()
-            except MySQLdb.OperationalError:
-                log.error(" error connecting to db, retrying")
+            except MySQLdb.OperationalError, e:
+                log.error("%s Error connecting to the database. Retrying..." % e)
                 time.sleep(60)
         
         return cursor;
@@ -146,6 +146,10 @@ class TwitterFirehoseManager:
         for term in filter_predicate.split(","):
             term = term.lower().strip();
             
+            # Strip '@' and '#' off the filter predicate
+            term = term[1:] if term[:1] == '@' else term
+            term = term[1:] if term[:1] == '#' else term
+
             # As per the streaming API guidelines, terms should be 60 chars
             # long at most
             if  len(term) > 60:
