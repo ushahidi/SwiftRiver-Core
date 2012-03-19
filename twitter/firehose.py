@@ -36,14 +36,13 @@ def predicate_match(L):
         # Returns the river ids if each element in the pattern is 
         # in the search string
         
-        found = False
+        occurrence = 0
         
         for p in search_pattern:
             pattern = "\\b"+p+"\\b"
-            found = (False if re.search(pattern, L[2], re.IGNORECASE) 
-                     is None else True)
+            occurrence += 1 if re.search(pattern, L[2], re.IGNORECASE) else 0
         
-        return L[1] if found else []
+        return L[1] if occurrence >= len(search_pattern) else []
                 
 
 class FilterPredicateMatcher(Thread):
