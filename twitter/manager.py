@@ -177,32 +177,35 @@ class TwitterFirehoseManager:
         
         # Get the current set of predicates from memory 
         current_predicates = self.__predicates.get(predicate_key, dict())
-            
+        
         # Nothing to delete
         if len(current_predicates) == 0:
             return
-            
+        
         # Delete
         for k, v in delete_items.iteritems():
             # Get the rivers
-            rivers = set(current_predicates.get(k, []))
-            if len(rivers) > 0:
-                rivers -= v
-                
-                if len(rivers) == 0:
-                    # No rivers for that predicate, remove it
-                    del current_predicates[k]
-                else:
-                    current_predicates[k] = list(rivers)
-                
+            rivers = map(lambda x: int(x), current_predicates.get(k, []))
             
+            s = map(lambda x: int(x), v)
+            
+            # Get the delta of the two sets of river ids
+            delta = list(set(rivers) - set(s))
+            
+            if len(delta) == 0:
+                # No rivers for that predicate, remove it
+                del current_predicates[k]
+            else:
+                current_predicates[k] = delta
+        
+        
         log.info("Deleted filter predicate %s from river %s" 
                  % (filter_predicate, river_id))
-            
+        
         self.__predicates[predicate_key].update(current_predicates)
-            
+        
         # Notify the firehose worker of the change
-        log.info("New filter predicates: %r" % self.__predicates)
+        log.info("New filter predicates: %r" % json.dumps(self.__predicates))
         message = json.dumps({'message': 'replace', 'data':self.__predicates})
                         
         # Publish the new predicate to the Firehose
