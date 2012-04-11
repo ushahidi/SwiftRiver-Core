@@ -451,8 +451,8 @@ class FirehoseStreamListener(StreamListener):
            track = json.loads(data)['limit']['track']
            self.on_limit(track)
        else:
-           # Out of sequence response, pass
-           pass
+           # Unhandled case, log
+           log.info("Unknown status in payload: %r" % data);
        
     
     def on_status(self, status):
