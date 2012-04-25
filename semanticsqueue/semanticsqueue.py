@@ -80,7 +80,7 @@ class SemanticsQueueWorker(Worker):
                            'source': 'gisgraphy'
                        })
                    # Remove gpe items and return the rest as tags
-                   del(semantics['gpe'])
+                   del(semantics['location'])
                 
                 
                 for k, v in semantics.iteritems():
