@@ -102,11 +102,12 @@ class SemanticsQueueWorker(Worker):
                            'source': 'gisgraphy'
                        })
                    # Remove gpe items and return the rest as tags
-                   del(semantics['location'])
+                   del semantics['location']
                 
-                
+                # Store each of the remaining semantics under the 'tags' key
+                # Each tag is stored in the format {tag_name: 'tag', 'tag_type': tag_type}
+                droplet['tags'] = []
                 for k, v in semantics.iteritems():
-                    droplet['tags'] = []
                     for tag in semantics[k]:
                         droplet['tags'].append({
                             'tag_name': tag,
