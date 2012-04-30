@@ -109,6 +109,7 @@ class FilterPredicateMatcher(Thread):
         
         # Close the channel and connection
         self._channel.close()
+        log.info("Published tweet to the droplet queue")
     
         
 class TwitterFirehoseWorker(Worker):

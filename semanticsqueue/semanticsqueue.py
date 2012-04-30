@@ -37,7 +37,29 @@ class SemanticsQueueWorker(Worker):
             return
         
         log.info(" %s droplet received with id %d" % (self.name, droplet.get('id', 0)))
-        droplet_raw = re.sub(r'<[^>]*?>', '', droplet['droplet_raw']).strip().encode('utf-8', 'ignore')
+        
+        #
+        # nltk.clean_html() implementation
+        # Credits - NLTK Team - <http://www.nltk.org>
+        #
+        
+        # Remove inline Javascript and CSS
+        droplet_raw = re.sub(r"(?is)<(script|style).*?>.*?(</\1)", "", droplet_raw['droplet_raw'].strip())
+        
+        # Remove HTML comments. Do this before removing HTML tags because comments
+        # can contain '>' characters
+        droplet_raw = re.sub(r"(?s)<!--(.*?)-->[\n]?", "", droplet_raw)
+        
+        # Remove the remaining HTML tags
+        droplet_raw = re.sub(r"(?s)<.*?>", " ", droplet_raw)
+        # Whitespace removal
+        droplet_raw = re.sub(r"&nbsp;", " ", droplet_raw)
+        droplet_raw = re.sub(r"   ", " ", droplet_raw)
+        droplet_raw = re.sub(r"   ", " ", droplet_raw)
+        
+        # Finally, UTF-8 encode the payload before submitting it to the
+        # tagging API
+        droplet_raw = droplet_raw.strip().encode('utf-8', 'ignore')
         
         if not droplet_raw: # Empty after stripping tags
             ch.basic_ack(delivery_tag = method.delivery_tag)
