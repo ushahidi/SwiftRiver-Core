@@ -44,7 +44,7 @@ class SemanticsQueueWorker(Worker):
         #
         
         # Remove inline Javascript and CSS
-        droplet_raw = re.sub(r"(?is)<(script|style).*?>.*?(</\1)", "", droplet_raw['droplet_raw'].strip())
+        droplet_raw = re.sub(r"(?is)<(script|style).*?>.*?(</\1)", "", droplet['droplet_raw'].strip())
         
         # Remove HTML comments. Do this before removing HTML tags because comments
         # can contain '>' characters
