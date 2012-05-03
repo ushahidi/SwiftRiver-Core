@@ -5,7 +5,6 @@ import ConfigParser
 import itertools
 import json
 import logging as log
-import pika
 import re
 import rfc822
 import socket
@@ -14,9 +13,11 @@ import time
 import utils
 from multiprocessing import Pool
 from os.path import dirname, realpath
-from swiftriver import Daemon, Worker
 from threading import Thread, Event
+
 from tweepy import OAuthHandler, Stream, StreamListener
+
+from swiftriver import Daemon, DropPublisher, Consumer
 
 
 """
@@ -48,26 +49,13 @@ def predicate_match(L):
 class FilterPredicateMatcher(Thread):
     """ Predicate matching thread"""
     
-    def __init__(self, mq_host, predicates, drop_dict):
+    def __init__(self, drop_publisher, predicates, drop_dict):
         Thread.__init__(self)
+        
+        self.drop_publisher = drop_publisher
         
         # Internal predicate registry
         self.predicates = []
-        self._channel = None
-        
-        # Attempt to get a connection
-        try:
-            params = pika.ConnectionParameters(host=mq_host)
-            strategy = pika.reconnection_strategies.SimpleReconnectionStrategy()
-                    
-            connection = pika.BlockingConnection(params, strategy)
-                    
-            self._channel = connection.channel()
-            self._channel.queue_declare(queue=Worker.DROPLET_QUEUE, durable=True)
-        except socket.error, msg:
-            log.error("Error connecting predicate matcher to the MQ. %s" % msg)
-        except pika.exceptions.ChannelClosed, e:
-            log.error("Predicate matcher lost connection to the MQ, reconnecting")
         
         search_string = drop_dict['droplet_content']
         for t in predicates:
@@ -79,9 +67,6 @@ class FilterPredicateMatcher(Thread):
         
     def run(self):
         # Get a pool of processes as many as the cores in the system
-        if self._channel is None:
-            return
-        
         pool = Pool()
         river_ids = pool.map(predicate_match, self.predicates)
         
@@ -101,24 +86,19 @@ class FilterPredicateMatcher(Thread):
                       % (self.drop_dict['droplet_content'], river_ids))
             
             self.drop_dict['river_id'] = river_ids
-                
-            self._channel.basic_publish(exchange='', 
-                                       routing_key=Worker.DROPLET_QUEUE,
-                                       properties=pika.BasicProperties(delivery_mode=2),
-                                       body=json.dumps(self.drop_dict))
-        
-        # Close the channel and connection
-        self._channel.close()
+            self.drop_publisher.publish(self.drop_dict)
     
         
-class TwitterFirehoseWorker(Worker):
+class TwitterFirehose(Daemon):
     """
     Worker to bootstrap the firehose and handle reconnection when new 
     predicates are received
     """
+
+    def __init__(self, pidfile, stdout, options):
+        Daemon.__init__(self, pidfile, stdout, stdout, stdout)
     
-    def __init__(self, name, mq_host, queue, options=None):
-        Worker.__init__(self, name, mq_host, queue, options)
+        self.mq_host = options.get('mq_host')
         
         # Track and follow predicates
         self.track = None
@@ -213,59 +193,60 @@ class TwitterFirehoseWorker(Worker):
         self.__reconnect_streams[predicate_type] = None
         
             
-    def handle_mq_response(self, ch, method, properties, body):
-        """Overrides Worker.handle_mq_response"""
+    def run_firehose(self, message_queue, confirm_queue):
         
         # Get the items to place on the firehose
-        predicates = json.loads(body)
-        log.info("Received filter predicates for the firehose")
-
-        t = [None, None]
-        
-        # Check for existing predicates
-        if len(self.predicates) == 0 and not predicates.has_key('message'):
-            # Initialize internal predicate registry
-            self.predicates = dict(predicates)
+        while True:
+            routing_key, delivery_tag, body = message_queue.get(True)
+            predicates = json.loads(body)
+            log.info("Received filter predicates for the firehose")
             
-            # Get the list of keywords to track and people to follow
-            t = self.__get_filter_predicates(predicates)
-
-        
-        # Check the stream for track predicates
-        if not self.track_firehose_running and t[0] is not None:
+            t = [None, None]
+            
+            # Check for existing predicates
+            if len(self.predicates) == 0 and not predicates.has_key('message'):
+                # Initialize internal predicate registry
+                self.predicates = dict(predicates)
                 
-            if self.__init_firehose('track', predicates):
-                log.info("Initializing streaming of track predicates: %r" 
-                            % t[0])
+                # Get the list of keywords to track and people to follow
+                t = self.__get_filter_predicates(predicates)
+            
+            
+            # Check the stream for track predicates
+            if not self.track_firehose_running and t[0] is not None:
                     
-                self.track_firehose_running = True
-    
-                self.track = t[0]
-                track_stream = self.streams['track']
-                track_stream.filter(None, self.track, True)
-    
-    
-        # Check the stream for follow predicates        
-        if not self.follow_firehose_running and t[1] is not None:
-            log.debug(t[1]);
-            if self.__init_firehose('follow', predicates):
-                log.info("Initializing streaming of follow predicates: %r" 
-                         % t[1])
-                    
-                self.follow_firehose_running = True
-                    
-                self.follow = t[1]
-                follow_stream = self.streams['follow']
-                follow_stream.filter(self.follow, None, True)
-
-        
-        # If either of the streams is running, update predicates
-        if self.follow_firehose_running or self.track_firehose_running:
-            # Update the filter predicates
-            self.__update_filter_predicates(predicates)
-        
-        #Acknowledge delivery
-        ch.basic_ack(delivery_tag = method.delivery_tag)
+                if self.__init_firehose('track', predicates):
+                    log.info("Initializing streaming of track predicates: %r" 
+                                % t[0])
+                        
+                    self.track_firehose_running = True
+            
+                    self.track = t[0]
+                    track_stream = self.streams['track']
+                    track_stream.filter(None, self.track, True)
+            
+            
+            # Check the stream for follow predicates        
+            if not self.follow_firehose_running and t[1] is not None:
+                log.debug(t[1]);
+                if self.__init_firehose('follow', predicates):
+                    log.info("Initializing streaming of follow predicates: %r" 
+                             % t[1])
+                        
+                    self.follow_firehose_running = True
+                        
+                    self.follow = t[1]
+                    follow_stream = self.streams['follow']
+                    follow_stream.filter(self.follow, None, True)
+            
+            
+            # If either of the streams is running, update predicates
+            if self.follow_firehose_running or self.track_firehose_running:
+                # Update the filter predicates
+                self.__update_filter_predicates(predicates)
+            
+            #Acknowledge delivery
+            confirm_queue.put(delivery_tag, False)
     
     
     def __init_firehose(self, predicate_type, predicates, reconnect=False):
@@ -283,7 +264,7 @@ class TwitterFirehoseWorker(Worker):
         track_predicates = {predicate_type: predicates.get(predicate_type)}
         
         # Listener for the specific predicate
-        listener = FirehoseStreamListener(self.mq_host, track_predicates, 
+        listener = FirehoseStreamListener(self.drop_publisher, track_predicates, 
                                           firehose_worker, predicate_type)
         
         auth = self.auth[predicate_type]
@@ -370,16 +351,26 @@ class TwitterFirehoseWorker(Worker):
         follow = (predicates.get('follow').keys() 
                   if predicates.has_key('follow') else None)
         
-        return track, follow        
+        return track, follow
+        
+    def run(self):
+        log.info("Firehose Started")
+        
+        self.drop_publisher = DropPublisher(self.mq_host)
+        
+        consumer = Consumer("firehose-consumer", self.mq_host, 
+                            utils.FIREHOSE_QUEUE)
+                                 
+        self.run_firehose(consumer.message_queue, consumer.confirm_queue)
 
 
 class FirehoseStreamListener(StreamListener):
     """Firehose stream listener for processing incoming firehose data"""
     
-    def __init__(self, mq_host, predicates, firehose_worker=None, predicate_type=None):
+    def __init__(self, drop_publisher, predicates, firehose_worker=None, predicate_type=None):
         StreamListener.__init__(self)
         
-        self.mq_host = mq_host
+        self.drop_publisher = drop_publisher
         
         self.__firehose_worker = firehose_worker
         self.__predicate_type = predicate_type
@@ -432,6 +423,7 @@ class FirehoseStreamListener(StreamListener):
                         'droplet_orig_id': payload['id_str'],
                         'droplet_type': 'original',
                         'droplet_title': payload['text'],
+                        'droplet_raw': payload['text'],
                         'droplet_content': payload['text'],
                         'droplet_locale': payload['user']['lang'],
                         'droplet_date_pub': time.strftime('%Y-%m-%d %H:%M:%S', 
@@ -439,7 +431,7 @@ class FirehoseStreamListener(StreamListener):
                         }
            
            # Spawn a predicate match worker
-           FilterPredicateMatcher(self.mq_host, 
+           FilterPredicateMatcher(self.drop_publisher,
                                   self.__predicate_list, 
                                   drop_dict).start()
            
@@ -476,31 +468,6 @@ class FirehoseStreamListener(StreamListener):
         """Called when stream connection times out"""
         return
 
-        
-
-class TwitterFirehoseDaemon(Daemon):
-    
-    def __init__(self, pidfile, stdout, options):
-        Daemon.__init__(self, pidfile, stdout, stdout, stdout)
-        
-        self.__mq_host = options.get('mq_host')
-        
-        # Auth settings for the track and filter predicates respectively
-        self.__options = {
-                          'track_auth':options.get('track_auth'), 
-                          'follow_auth':options.get('follow_auth')
-                          }
-        
-    def run(self):
-        try:
-            event = Event()
-            TwitterFirehoseWorker('twitter-firehose', self.__mq_host, 
-                                  utils.FIREHOSE_QUEUE, self.__options).start()
-            event.wait()
-        except Exception, e:
-            log.exception(e)
-        finally:
-            log.info("Exiting")
     
 
 if __name__ == '__main__':
@@ -546,7 +513,7 @@ if __name__ == '__main__':
                    }
         
         # Create the daemon
-        daemon = TwitterFirehoseDaemon(pidfile, stdout, options)
+        daemon = TwitterFirehose(pidfile, stdout, options)
         
         # Check for the submitted command
         if len(sys.argv) == 2:

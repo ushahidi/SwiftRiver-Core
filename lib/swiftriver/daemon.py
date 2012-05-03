@@ -62,6 +62,9 @@ class Daemon:
         os.dup2(si.fileno(), sys.stdin.fileno())
         os.dup2(so.fileno(), sys.stdout.fileno())
         os.dup2(se.fileno(), sys.stderr.fileno())
+        
+        #Register SIGTERM handler
+        atexit.register(self.onexit)
     
         # write pidfile
         atexit.register(self.delpid)
@@ -135,3 +138,10 @@ class Daemon:
         You should override this method when you subclass Daemon. It will be called after the process has been
         daemonized by start() or restart().
         """
+        pass
+    
+    def onexit(self):
+        """
+        Override this to do a cleanup before shutdown.
+        """
+        pass

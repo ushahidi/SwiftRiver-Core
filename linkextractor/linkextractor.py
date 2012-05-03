@@ -12,30 +12,22 @@ import ConfigParser
 import logging as log
 import pika
 import json, re
-from threading import Event
+from threading import Thread
 from httplib2 import Http
 from os.path import dirname, realpath
-from swiftriver import Daemon, Worker
+from swiftriver import Daemon, Consumer, Worker, DropPublisher
 
 
 class LinkExtractorQueueWorker(Worker):
     
-    def __init__(self, name, mq_host, queue, options=None):
-        Worker.__init__(self, name, mq_host,  queue, options)
-        self.start()
-
+    def __init__(self, name, job_queue, confirm_queue, drop_publisher):
+        self.drop_publisher = drop_publisher
+        Worker.__init__(self, name, job_queue, confirm_queue)
     
-    def handle_mq_response(self, ch, method, properties, body):
+    def work(self):
         """POSTs the droplet to the semantics API"""
-        droplet = None
-        try:
-            droplet = json.loads(body)
-        except ValueError, e:
-            # Bad value in the queue, skip it
-            log.error(" %s bad value received in the queue" % (self.name,))
-            ch.basic_ack(delivery_tag = method.delivery_tag)
-            return
-            
+        routing_key, delivery_tag, body = self.job_queue.get(True)
+        droplet = json.loads(body)            
         log.info(" %s droplet received with id %d" % (self.name, droplet.get('id', 0)))
         
         # Strip tags leaving only hyperlinks
@@ -44,7 +36,6 @@ class LinkExtractorQueueWorker(Worker):
         # Extract the href from hyperlinks since the regex above expects a space character
         # at the end of the url
         droplet_raw = re.sub(r'(?i)<(?=\s*[a]\s+)[^>]*href\s*=\s*"([^"]*)"[^>]*?>', ' \\1 ', droplet_raw)
-        
         
         for link in re.findall("(?:https?://[^\\s]+)", droplet_raw):
             if not droplet.has_key('links'):
@@ -69,23 +60,15 @@ class LinkExtractorQueueWorker(Worker):
                 except Exception, e:
                     log.error(" %s error expanding url %r" % (self.name, e))
             
-            droplet['links'].append(link)
+            droplet['links'].append({'url': link})
             
         # Send back the updated droplet to the droplet queue for updating
         droplet['links_complete'] = True
-        droplet_channel = self.mq.channel()
-        droplet_channel.queue_declare(queue=self.DROPLET_QUEUE, durable=True)
-        droplet_channel.basic_publish(exchange='',
-                              routing_key=self.DROPLET_QUEUE,
-                              properties=pika.BasicProperties(
-                                    delivery_mode = 2, # make message persistent
-                              ),
-                              body=json.dumps(droplet))
-        droplet_channel.close()
+        self.drop_publisher.publish(droplet)
                 
         # Confirm delivery only once droplet has been passed
         # for metadata extraction
-        ch.basic_ack(delivery_tag = method.delivery_tag)
+        self.confirm_queue.put(delivery_tag, False)
         log.info(" %s finished processing" % (self.name,))
         
 class LinkExtractorQueueDaemon(Daemon):
@@ -96,17 +79,23 @@ class LinkExtractorQueueDaemon(Daemon):
         self.mq_host = mq_host
     
     def run(self):
-        event = Event()
-        
-        queue_name = 'LINK_EXTRACTOR_QUEUE'
-        options = {'exchange_name': 'metadata', 'exchange_type': 'fanout', 'durable_queue': True}
-        
+        options = {'exchange_name': 'metadata', 
+                   'exchange_type': 'fanout', 
+                   'durable_queue': True,
+                   'prefetch_count': self.num_workers}
+        drop_consumer = Consumer("linkextractor-consumer", self.mq_host, 
+                                 'LINK_EXTRACTOR_QUEUE', options)        
+        drop_publisher = DropPublisher(mq_host)
+                
         for x in range(self.num_workers):
-            LinkExtractorQueueWorker("linkextractor-worker-" + str(x), self.mq_host, queue_name, options)
+            LinkExtractorQueueWorker("linkextractor-worker-" + str(x), 
+                                     drop_consumer.message_queue, 
+                                     drop_consumer.confirm_queue, 
+                                     drop_publisher)
+        log.info("Workers started")
         
-        log.info("Workers started");
-        event.wait()
-        log.info("Exiting");
+        drop_consumer.join()
+        log.info("Exiting")
             
 if __name__ == "__main__":
     config = ConfigParser.SafeConfigParser()

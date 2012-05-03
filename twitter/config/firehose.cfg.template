@@ -2,7 +2,6 @@
 log_file=/Users/ekala/dev/SwiftRiver-Core/twitter/logs/firehose.log
 out_file=/Users/ekala/dev/SwiftRiver-Core/twitter/logs/firehose.out
 pid_file=/tmp/firehose.pid
-num_workers=10
 log_level=DEBUG
 mq_host=localhost
 

@@ -4,18 +4,19 @@
 import ConfigParser
 import json
 import logging as log
-import MySQLdb
 import socket
 import sys
-import pika
 import time
 import utils
 from os.path import dirname, realpath
 from threading import Thread, RLock, Event
-from swiftriver import Daemon, Worker
+
+import MySQLdb
+
+from swiftriver import Daemon, Worker, Consumer, Publisher
 
 
-class TwitterFirehoseManager:
+class TwitterFirehoseManager(Daemon):
     """ This class manages updates to the track and follow predicates
     which are submitted to the Twitter Firehose via the streaming API
     
@@ -25,13 +26,15 @@ class TwitterFirehoseManager:
     are added/deleted
     """
     
-    def __init__(self, mq_host, db_config, predicate_workers):
+    def __init__(self, pid_file, out_file, mq_host, db_config, num_workers):
+        Daemon.__init__(self, pid_file, out_file, out_file, out_file)
+        
         self.__mq_host = mq_host
         self.__db_config = db_config
         self.__lock = RLock()
         self.__db = None
         
-        self.__predicate_workers = predicate_workers
+        self.__predicate_workers = num_workers
         
         # Filter predicates for the firehose
         self.__predicates = {}
@@ -59,7 +62,7 @@ class TwitterFirehoseManager:
         
         return cursor;
             
-    def add_filter_predicate(self, mq, payload):
+    def add_filter_predicate(self, payload):
         """ Adds a filter predicate to the firehose """
         
         # Grab essential data
@@ -120,18 +123,7 @@ class TwitterFirehoseManager:
         if len(publish_data) > 0:
             log.debug("Publishing new predicates to the firehose %r" 
                       % publish_data)
-                
-            # Construct the message to sent out to the process consuming the firehose
-            message = json.dumps(publish_data)
-                        
-            # Publish the new predicate to the Firehose
-            channel = mq.channel()
-            channel.queue_declare(queue=utils.FIREHOSE_QUEUE, durable=False)
-            channel.basic_publish(exchange = '', 
-                                  routing_key=utils.FIREHOSE_QUEUE,
-                                  body=message)
-            channel.close()
-            
+            self.firehose_publisher.publish(publish_data)    
 
     def __get_predicate_type(self, payload_key):
         """ Given the payload key, returns the predicate type"""
@@ -165,7 +157,7 @@ class TwitterFirehoseManager:
             update_target[term].add(river_id)
             
             
-    def delete_filter_predicate(self, mq, payload):
+    def delete_filter_predicate(self, payload):
         # Remove the predicate from the internal cache and from 
         # firehose predicates list
         predicate_key =  self.__get_predicate_type(payload['key'])
@@ -206,15 +198,7 @@ class TwitterFirehoseManager:
         
         # Notify the firehose worker of the change
         log.info("New filter predicates: %r" % json.dumps(self.__predicates))
-        message = json.dumps({'message': 'replace', 'data':self.__predicates})
-                        
-        # Publish the new predicate to the Firehose
-        channel = mq.channel()
-        channel.queue_declare(queue=utils.FIREHOSE_QUEUE, durable=False)
-        channel.basic_publish(exchange = '', 
-                              routing_key=utils.FIREHOSE_QUEUE,
-                              body=message)
-        channel.close()
+        self.firehose_publisher.publish({'message': 'replace', 'data':self.__predicates})
     
     def __get_firehose_predicates(self):
         """Gets all the twitter channel options and classifies them
@@ -257,65 +241,50 @@ class TwitterFirehoseManager:
         
         return predicates
     
-    def _run(self):
+    def run_manager(self):
         # Options to be passed to the predicate update workers
         while True:
-            try:
-                if self.__predicates_changed:
-                    message = json.dumps(self.__predicates)
-                    log.info("Placing filter predicates in the firehose queue %r" 
-                             % message)
-                    
-                    params = pika.ConnectionParameters(host=self.__mq_host)
-                    connection = pika.BlockingConnection(params)
-                    
-                    channel = connection.channel()
-                    channel.queue_declare(queue=utils.FIREHOSE_QUEUE, durable=False)
-                    channel.basic_publish(exchange='', 
-                                          routing_key=utils.FIREHOSE_QUEUE,
-                                          body=message)
-                    channel.close()
-                    
-                    self.__predicates_changed = False
-                
-                time.sleep(5)
-            except socket.error, msg:
-                log.error("%s Firehose manager error connecting to the MQ, retrying" 
-                          % msg)
-                time.sleep(60)
-            except pika.exceptions.AMQPConnectionError, e:
-                log.error(" Firehose manager lost connection to the MQ, reconnecting")
-                time.sleep(60)
-            except pika.exceptions.ChannelClosed, e:
-                log.error(" Firehose manager lost connection to the MQ, reconnecting")
-                time.sleep(60)
+            if self.__predicates_changed:
+                log.info("Placing filter predicates in the firehose queue %r" 
+                         % self.__predicates)
+                self.firehose_publisher.publish(self.__predicates)
+                self.__predicates_changed = False                
+            time.sleep(5)
                 
     
-    def start(self):
+    def run(self):
+        log.info("Twitter Firehose Manager started")
+        
+        self.firehose_publisher = FirehosePublisher(self.__mq_host)
+        
         # Spawn a set of workers to listen for predicate updates
-        worker_options = {'exchange_name': 'chatter', 
-                          'exchange_type': 'topic', 
-                          'routing_key': 'web.channel_option.twitter.*',
-                          'firehose_manager': self
-        }
+        options = {'exchange_name': 'chatter', 
+                   'exchange_type': 'topic', 
+                   'routing_key': 'web.channel_option.twitter.*',
+                   'durable_exchange':  True,
+                   'prefetch_count': self.__predicate_workers}
+        channel_update_consumer = Consumer("channel-update-consumer", 
+                                           self.__mq_host, 
+                                           utils.TWITTER_UPDATE_QUEUE,
+                                           options)
+        
         for x in range(self.__predicate_workers):
-            # Generate the worker name
-            worker_name = "twitter-predicate-updater-" + str(x)
-                
-            # Spawn the worker
-            worker = TwitterPredicateUpdateWorker(worker_name, self.__mq_host, 
-                                         utils.TWITTER_UPDATE_QUEUE, 
-                                         worker_options)
-            worker.start()
+            TwitterPredicateUpdateWorker("twitter-predicate-updater-" + str(x),
+                                         channel_update_consumer.message_queue,
+                                         channel_update_consumer.confirm_queue,
+                                         self)
             
         # Get all the predicates from the database
         self.__predicates = self.__get_firehose_predicates()
         self.__predicates_changed = (len(self.__predicates) > 0)
         
-        # Run the manager
-        log.info("Starting the Twitter Firehose Manager thread...")
-        Thread(target=self._run).start()
+        self.run_manager()
+        
+class FirehosePublisher(Publisher):
 
+    def __init__(self, mq_host):
+        Publisher.__init__(self, "Firehose Publisher", mq_host, 
+                           queue_name=utils.FIREHOSE_QUEUE, durable=False)
 
 class TwitterPredicateUpdateWorker(Worker):
     """
@@ -323,56 +292,28 @@ class TwitterPredicateUpdateWorker(Worker):
     and updates the internal database/cache
     """
         
-    def __init__(self, name, mq_host, queue, options=None):
-        Worker.__init__(self, name, mq_host, queue, options)
-        self.__firehose_manager = options.get('firehose_manager')
+    def __init__(self, name, job_queue, confirm_queue, manager):
+        self.manager = manager
+        Worker.__init__(self, name, job_queue, confirm_queue)
         
-    def handle_mq_response(self, ch, method, properties, body):
+    def work(self):
         try:
-            payload = json.loads(body)
+            routing_key, delivery_tag, body = self.job_queue.get(True)
+            message = json.loads(body)
             # Add predicates
-            if method.routing_key == "web.channel_option.twitter.add":
+            if routing_key == "web.channel_option.twitter.add":
                 log.info("Add new twitter predicate...")
-                self.__firehose_manager.add_filter_predicate(self.mq, payload)
+                self.manager.add_filter_predicate(message)
             
             # Delete predicates
-            if method.routing_key == "web.channel_option.twitter.delete":
+            if routing_key == "web.channel_option.twitter.delete":
                 log.info("Deleting twitter predicate...")
-                self.__firehose_manager.delete_filter_predicate(self.mq, payload)
-                
+                self.manager.delete_filter_predicate(message)
+            
+            self.confirm_queue.put(delivery_tag, False)  
         except Exception, e:
             log.info(e)
-            log.exception(e)
-            ch.basic_ack(delivery_tag=method.delivery_tag)
-        
-        ch.basic_ack(delivery_tag=method.delivery_tag)
-
-    
-class TwitterFirehoseManagerDaemon(Daemon):
-    
-    def __init__(self, pidfile, stdout, options):
-        Daemon.__init__(self, pidfile, stdout, stdout, stdout)
-        
-        # TODO: Raise exception if the options are not specified
-#        if options is None:
-#            raise Error
-        self.__mq_host = options.get('mq_host')
-        self.__db_config = options.get('db_config')
-        self.__num_workers = options.get('num_workers')
-        
-    def run(self):
-        # Initialize the firehose manager
-        try:
-            event = Event()
-            TwitterFirehoseManager(self.__mq_host, self.__db_config, 
-                                   self.__num_workers).start()
-            event.wait()
-        except Exception, e:
-            log.exception(e)
-        finally:
-            log.info("Exiting...")
-       
-
+            log.exception(e)               
 
 if __name__ == '__main__':
     # Load the configuration file
@@ -407,13 +348,11 @@ if __name__ == '__main__':
         }
         
         # Daemon options
-        options = {'mq_host': config.get('main', 'mq_host'),
-                   'num_workers': config.getint('main', 'num_workers'),
-                   'db_config': db_config
-                   }
+        mq_host = config.get('main', 'mq_host')
+        num_workers = config.getint('main', 'num_workers')
 
         # Initialize the daemon
-        daemon = TwitterFirehoseManagerDaemon(pidfile, stdout, options)
+        daemon = TwitterFirehoseManager(pidfile, stdout, mq_host, db_config, num_workers)
         
         if len(sys.argv) == 2:
             if sys.argv[1] == 'start':
