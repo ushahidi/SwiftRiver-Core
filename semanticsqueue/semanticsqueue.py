@@ -1,20 +1,17 @@
 #!/usr/bin/env python
 # encoding: utf-8
 """
-Extracts semantics from the droplets posted to the metadata fanout exchange
-and publishes the updated droplets back to the DROPLET_QUEUE for updating
-in the db
+Extracts semantics from the droplets posted to the metadata fanout exchange and publishes
+the updated droplets back to the DROPLET_QUEUE for updating in the db
 
 Copyright (c) 2012 Ushahidi. All rights reserved.
 """
 
-import sys
-import time
+import sys, time
 import ConfigParser
 import socket
 import logging as log
-import json
-import re
+import json, re
 from urllib import urlencode
 from threading import Thread
 from os.path import dirname, realpath
@@ -22,7 +19,6 @@ from os.path import dirname, realpath
 from httplib2 import Http
 
 from swiftriver import Worker, Consumer, Daemon, DropPublisher
-
 
 class SemanticsQueueWorker(Worker):
     
@@ -42,24 +38,21 @@ class SemanticsQueueWorker(Worker):
         # nltk.clean_html() implementation
         # Credits - NLTK Team - <http://www.nltk.org>
         #
-
+        
         # Remove inline Javascript and CSS
-        droplet_raw = re.sub(
-            r"(?is)<(script|style).*?>.*?(</\1)",
-            "",
-            droplet['droplet_raw'].strip())
-
-        # Remove HTML comments. Do this before removing HTML tags because
-        # comments can contain '>' characters
+        droplet_raw = re.sub(r"(?is)<(script|style).*?>.*?(</\1)", "", droplet['droplet_raw'].strip())
+        
+        # Remove HTML comments. Do this before removing HTML tags because comments
+        # can contain '>' characters
         droplet_raw = re.sub(r"(?s)<!--(.*?)-->[\n]?", "", droplet_raw)
-
+        
         # Remove the remaining HTML tags
         droplet_raw = re.sub(r"(?s)<.*?>", " ", droplet_raw)
         # Whitespace removal
         droplet_raw = re.sub(r"&nbsp;", " ", droplet_raw)
         droplet_raw = re.sub(r"   ", " ", droplet_raw)
         droplet_raw = re.sub(r"   ", " ", droplet_raw)
-
+        
         # Finally, UTF-8 encode the payload before submitting it to the
         # tagging API
         droplet_raw = droplet_raw.strip().encode('utf-8', 'ignore')
@@ -122,17 +115,16 @@ class SemanticsQueueWorker(Worker):
         self.confirm_queue.put(delivery_tag, False)
         log.info(" %s finished processing" % (self.name,))
         
-
 class SemanticsQueueDaemon(Daemon):
-
     def __init__(self, num_workers, mq_host, api_url, pid_file, out_file):
         Daemon.__init__(self, pid_file, out_file, out_file, out_file)
-
+        
         self.num_workers = num_workers
         self.api_url = api_url
         self.mq_host = mq_host
-
-    def run(self):        
+    
+    def run(self):
+        
         # Parameters to be passed on to the queue worker
         queue_name = 'SEMANTICS_QUEUE'
         options = {'exchange_name': 'metadata', 
@@ -152,13 +144,11 @@ class SemanticsQueueDaemon(Daemon):
         log.info("Workers started");
         drop_consumer.join();
         log.info("Exiting");
-
-
+            
 if __name__ == "__main__":
     config = ConfigParser.SafeConfigParser()
-    config.readfp(open(
-        dirname(realpath(__file__)) + '/config/semanticsqueue.cfg'))
-
+    config.readfp(open(dirname(realpath(__file__))+'/config/semanticsqueue.cfg'))
+    
     try:
         log_file = config.get("main", 'log_file')
         out_file = config.get("main", 'out_file')
@@ -167,17 +157,12 @@ if __name__ == "__main__":
         log_level = config.get("main", 'log_level')
         api_url = config.get("main", 'api_url')
         mq_host = config.get("main", 'mq_host')
-
+        
         FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        log.basicConfig(filename=log_file,
-            level=getattr(log, log_level.upper()),
-            format=FORMAT)
-        # Create outfile if it does not exist
-        file(out_file, 'a')
-
-        # Create the daemon reference
-        daemon = SemanticsQueueDaemon(num_workers, mq_host, api_url,
-                                      pid_file, out_file)
+        log.basicConfig(filename=log_file, level=getattr(log, log_level.upper()), format=FORMAT)        
+        file(out_file, 'a') # Create outfile if it does not exist
+        
+        daemon = SemanticsQueueDaemon(num_workers, mq_host, api_url, pid_file, out_file)
         if len(sys.argv) == 2:
             if 'start' == sys.argv[1]:
                 daemon.start()

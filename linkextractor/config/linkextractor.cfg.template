@@ -1,7 +1,0 @@
-[main]
-log_file=/Users/bmuita/workspace/swiftcore/linkextractor/logs/linkextractor.log
-out_file=/Users/bmuita/workspace/swiftcore/linkextractor/logs/linkextractor.out
-pid_file=/tmp/linkextractor.pid
-num_workers=10
-log_level=DEBUG
-mq_host=localhost

@@ -31,8 +31,7 @@ class RssFetchScheduler(Daemon):
 
     FETCH_INTERVAL = 1800
     
-    def __init__(self, num_response_workers, num_channel_update_workers,
-                 mq_host, db_config, pid_file, out_file):
+    def __init__(self, num_response_workers, num_channel_update_workers, mq_host, db_config, pid_file, out_file):
         Daemon.__init__(self, pid_file, out_file, out_file, out_file)
         
         self.num_response_workers = num_response_workers
@@ -50,24 +49,25 @@ class RssFetchScheduler(Daemon):
                 if not self.db:
                     self.db = MySQLdb.connect(host=self.db_config['host'],
                                                 port=self.db_config['port'],
-                                                passwd=self.db_config['pass'],
+                                                passwd=self.db_config['pass'], 
                                                 user=self.db_config['user'],
                                                 db=self.db_config['database'])
-
+                                                        
                 self.db.ping(True)
                 cursor = self.db.cursor()
             except MySQLdb.OperationalError:
                 log.error(" error connecting to db, retrying")
                 time.sleep(60)
-
+        
         return cursor;
+            
+            
 
     def get_channel_filter_urls(self):
         """
         Get a list of urls from the channel_filter_options table
         and return with the rivers ids grouped per url
         """
-
         c = self.get_cursor()
         c.execute("""
         select river_id, value
@@ -76,14 +76,14 @@ class RssFetchScheduler(Daemon):
         and cf.channel = 'rss'
         and cfo.key = 'url'
         """)
-
+        
         urls = {}
         for river_id, value in c.fetchall():
             url = json.loads(value)['value']
             if not urls.has_key(url):
                 urls[url] = []
             urls[url].append(int(river_id))
-
+            
         c.close()
         log.debug("channel_filter_urls fetched %r" % urls)
         return urls
@@ -97,7 +97,7 @@ class RssFetchScheduler(Daemon):
         select url, last_fetch_time, last_fetch_etag, last_fetch_modified
         from rss_urls
         """)
-
+    
         urls = {}
         for url, last_fetch_time, last_fetch_etag, last_fetch_modified in c.fetchall():
             urls[url] = {
@@ -107,18 +107,14 @@ class RssFetchScheduler(Daemon):
                 'last_fetch_modified': last_fetch_modified,
                 'submitted': False
             }
-
+                        
         c.close()
         log.debug("rss_urls fetched %r" % urls)
         return urls
         
     def get_next_fetch_time(self, last_fetch_time):
-        """Get a next fetch time with some added entropy to spread out
-        workloads.
-        """
-
-        return last_fetch_time + self.FETCH_INTERVAL +
-                random.randint(0, self.FETCH_INTERVAL)
+        """Get a next fetch time with some added entropy to spread out workloads."""
+        return last_fetch_time + self.FETCH_INTERVAL + random.randint(0, self.FETCH_INTERVAL)
         
     def add_new_urls(self):
         """
@@ -149,8 +145,8 @@ class RssFetchScheduler(Daemon):
         
     def remove_deleted_urls(self):
         """
-        Removes the urls in rss_urls missing from channel_filter_options from
-        the rss_urls table and the self.rss_urls list
+        Removes the urls in rss_urls missing from channel_filter_options from the rss_urls table
+        and the self.rss_urls list
         """
         with self.lock:
             deleted_urls = set([url for url in self.rss_urls]) - set([url for url in self.channel_filter_urls])
@@ -362,8 +358,7 @@ class ChannelUpdateHandler(Worker):
 class RssFetchPublisher(Publisher):
 
     def __init__(self, mq_host):
-        Publisher.__init__(self, "RSS Fetch Queue Publisher", mq_host,
-                           queue_name='RSS_FETCH_QUEUE', durable=False)
+        Publisher.__init__(self, "RSS Fetch Queue Publisher", mq_host, queue_name='RSS_FETCH_QUEUE', durable=False)
                                   
 if __name__ == "__main__":
     config = ConfigParser.SafeConfigParser()
