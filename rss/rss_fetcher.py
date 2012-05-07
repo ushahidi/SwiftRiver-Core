@@ -228,7 +228,7 @@ class RssFetcherDaemon(Daemon):
                                  consumer.confirm_queue, self.db_config,
                                  drop_publisher, response_publisher)
 
-            log.info("Workers started")
+            log.info("Workers started");
             consumer.join()
         except Exception, e:
             #Catch unhandled exceptions
