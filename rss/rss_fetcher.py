@@ -163,7 +163,7 @@ class RssFetcherWorker(Worker):
                 limit 50
                 ) a
                 );
-                """, % (message['url'], message['url']))
+                """ % (message['url'], message['url']))
 
             c.executemany(
                 """
