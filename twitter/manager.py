@@ -176,15 +176,16 @@ class TwitterFirehoseManager(Daemon):
         
         # Delete
         for k, v in delete_items.iteritems():
-            # Get the rivers
+            # Rivers currently using the predicate
             rivers = map(lambda x: int(x), current_predicates.get(k, []))
             
-            s = map(lambda x: int(x), v)
+            # Rivers the predicate has been deleted from
+            deleted_rivers = map(lambda x: int(x), v)
             
             # Get the delta of the two sets of river ids
-            delta = list(set(rivers) - set(s))
+            delta = list(set(rivers) - set(deleted_rivers))
             
-            if len(delta) == 0:
+            if len(delta) == 0 and current_predicates.has_key(k):
                 # No rivers for that predicate, remove it
                 del current_predicates[k]
             else:
