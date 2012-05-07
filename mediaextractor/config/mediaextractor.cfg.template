@@ -1,0 +1,13 @@
+[main]
+log_file=/Users/bmuita/workspace/swiftcore/mediaextractor/logs/mediaextractor.log
+out_file=/Users/bmuita/workspace/swiftcore/mediaextractor/logs/mediaextractor.out
+pid_file=/tmp/mediaextractor.pid
+num_workers=10
+log_level=DEBUG
+mq_host=localhost
+
+[cloudfiles]
+enabled=false
+username=xxxxx
+api_key=xxxxx
+container=test_drop_image_thumbs

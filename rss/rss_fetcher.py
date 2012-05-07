@@ -17,35 +17,35 @@ Copyright (c) 2012 Ushahidi. All rights reserved.
 import sys
 import time
 import logging as log
-import pika
-import feedparser
 import json
 import ConfigParser
 import pickle
 import hashlib
 from threading import Event
 from os.path import dirname, realpath
-from swiftriver import Daemon, Worker
+
+import feedparser
+import MySQLdb
+
+from swiftriver import Daemon, Consumer, Worker, Publisher, DropPublisher
 
 
 class RssFetcherWorker(Worker):
-    """Thread executing tasks from a given queue"""
 
-    SHEDULER_RESPONSE_QUEUE = 'RSS_FETCH_RESPONSE'
+    def __init__(self, name, job_queue, confirm_queue, db_config,
+                 drop_publisher, response_publisher):
+        self.db_config = db_config
+        self.drop_publisher = drop_publisher
+        self.response_publisher = response_publisher
+        self.db = None
+        Worker.__init__(self, name, job_queue, confirm_queue)
 
-    def __init__(self, name, mq_host, queue, options=None):
-        Worker.__init__(self, name, mq_host, queue, options)
-
-    def handle_mq_response(self, ch, method, properties, body):
+    def work(self):
         """Process a URL"""
+        routing_key, delivery_tag, body = self.job_queue.get(True)
         message = json.loads(body)
-        log.info("%s fetching %s" % (self.name, message['url']))
-
-        # The droplet queue
-        droplet_channel = self.mq.channel()
-        droplet_channel.queue_declare(queue=self.DROPLET_QUEUE, durable=True)
-        drops = []
-
+        log.info(" %s fetching %s" % (self.name, message['url'])) 
+        
         cache_found = False
         if message.get('use_cache', False):
             c = self.get_cursor()
@@ -65,15 +65,11 @@ class RssFetcherWorker(Worker):
             for db_drop, in results:
                 drop = pickle.loads(db_drop)
                 drop['river_id'] = message['river_ids']
-                droplet_channel.basic_publish(
-                    exchange='', routing_key=self.DROPLET_QUEUE,
-                    properties=pika.BasicProperties(
-                        delivery_mode=2, # make message persistent
-                    ),
-                    body=json.dumps(drop))
+                self.drop_publisher.publish(drop)
 
             c.close()
-
+        
+        drops = []
         if not (message.get('use_cache', False) and cache_found):
             # Fetch the feed and use etag/modified headers if they
             # were provided in the last fetch
@@ -117,35 +113,26 @@ class RssFetcherWorker(Worker):
                     'identity_username' : d.feed.get('link', message['url']),
                     'identity_name': identity_name,
                     'identity_avatar': avatar,
-                    'droplet_orig_id' : hashlib.sha256(
-                                            entry.get('link', '') +
-                                            entry.get('id', '')).hexdigest(),
+                    'droplet_orig_id' : hashlib.md5(entry.get('link', '') + entry.get('id', '')).hexdigest(),
                     'droplet_type': 'original',
                     'droplet_title': entry.get('title', None),
                     'droplet_content': content,
+                    'droplet_raw': content,
                     'droplet_locale': locale,
-                    'droplet_date_pub': time.strftime('%Y-%m-%d %H:%M:%S',
-                                                      entry.get('date_parsed',
-                                                                time.gmtime()))
+                    'droplet_date_pub': time.strftime('%Y-%m-%d %H:%M:%S', 
+                                                     entry.get('date_parsed',
+                                                               time.gmtime()))
                 }
 
                 #log.debug("Drop: %r" % drop)
-                drops.append((message['url'],
-                              time.mktime(entry.get('date_parsed',
-                                                    time.gmtime())),
+                drops.append((message['url'], 
+                              time.mktime(entry.get('date_parsed',time.gmtime())),
                               pickle.dumps(drop)))
 
-                droplet_channel.basic_publish(
-                    exchange='', routing_key=self.DROPLET_QUEUE,
-                    properties=pika.BasicProperties(delivery_mode=2),
-                    body=json.dumps(drop))
+                self.drop_publisher.publish(drop)
 
             # Send the status, etag & modified back the the scheduler
-            response_channel = self.mq.channel()
-            response_channel.queue_declare(queue=self.SHEDULER_RESPONSE_QUEUE,
-                                            durable=False)
-
-            message_body = json.dumps({
+            self.response_publisher.publish({
                 'url': message['url'],
                 'status': d.get('status', None),
                 'last_fetch_modified': d.get('modified',
@@ -153,19 +140,11 @@ class RssFetcherWorker(Worker):
                 'last_fetch_etag': d.get('etag', message['last_fetch_etag']),
                 'last_fetch_time': int(time.mktime(time.gmtime()))
             })
-
-            response_channel.basic_publish(
-                exchange='',
-                routing_key=self.SHEDULER_RESPONSE_QUEUE,
-                body=message_body)
-
-            response_channel.close()
-
-        droplet_channel.close()
-        ch.basic_ack(delivery_tag=method.delivery_tag)
+            
+        self.confirm_queue.put(delivery_tag, False)
         log.info(" %s done fetching %s" % (self.name, message['url']))
-
-        # Add the drops to our cache
+        
+        # Add new drops to our local cache
         if len(drops):
             c = self.get_cursor()
 
@@ -195,6 +174,34 @@ class RssFetcherWorker(Worker):
             c.close()
             self.db.commit()
 
+    def get_cursor(self):
+        """Get a db connection and attempt reconnection"""
+
+        cursor = None
+        while not cursor:
+            try:        
+                if not self.db:
+                    self.db = MySQLdb.connect(host=self.db_config['host'],
+                                              port=self.db_config['port'],
+                                              passwd=self.db_config['pass'], 
+                                              user=self.db_config['user'],
+                                              db=self.db_config['database'])
+
+                self.db.ping(True)
+                cursor = self.db.cursor()
+            except MySQLdb.OperationalError:
+                log.error(" error connecting to the database, retrying")
+                time.sleep(60 + random.randint(0, 120))
+        
+        return cursor
+
+
+class ResponsePublisher(Publisher):
+
+    def __init__(self, mq_host):
+        Publisher.__init__(self, "RSS Fetch Response Publisher", mq_host, 
+                           queue_name='RSS_FETCH_RESPONSE', durable=False)
+
 
 class RssFetcherDaemon(Daemon):
 
@@ -208,18 +215,21 @@ class RssFetcherDaemon(Daemon):
         self.db_config = db_config
 
     def run(self):
-        try:
-            event = Event()
+        try:            
+            consumer = Consumer("rss-fetcher-consumer", self.mq_host,
+                                     'RSS_FETCH_QUEUE',
+                                     {'prefetch_count': self.num_workers})
 
-            queue_name = 'RSS_FETCH_QUEUE'
-            options = {'db_config': self.db_config}
+            drop_publisher = DropPublisher(mq_host)
+            response_publisher = ResponsePublisher(mq_host)
 
             for x in range(self.num_workers):
-                RssFetcherWorker("worker-" + str(x), self.mq_host,
-                                 queue_name, options).start()
+                RssFetcherWorker("worker-" + str(x), consumer.message_queue,
+                                 consumer.confirm_queue, self.db_config,
+                                 drop_publisher, response_publisher)
 
-            log.info("Workers started")
-            event.wait()
+            log.info("Workers started");
+            consumer.join()
         except Exception, e:
             #Catch unhandled exceptions
             log.exception(e)
