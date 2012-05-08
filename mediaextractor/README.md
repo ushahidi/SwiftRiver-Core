@@ -23,8 +23,8 @@ Installation of Required Libraries
 Ubuntu/Debian Installation
 -------------------------------------
 
-        $ sudo apt-get install python-pip python-pil python-lxml
-        $ pip install cloudfiles
+        $ sudo apt-get install python-pip python-imaging python-lxml
+        $ pip install python-cloudfiles
         
 Running the applications
 ========================= 
