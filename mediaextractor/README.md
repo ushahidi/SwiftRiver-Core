@@ -1,5 +1,5 @@
 SwiftCore Media Extractor
-========================-=
+=========================
 
 Droplet post processor that scans a droplet's content for links and images add adds them as metadata.
 
