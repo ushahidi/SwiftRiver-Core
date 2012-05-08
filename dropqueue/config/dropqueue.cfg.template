@@ -1,7 +1,7 @@
 [main]
-log_file=/Users/bmuita/workspace/swiftcore/dropletqueue/logs/dropletqueue.log
-out_file=/Users/bmuita/workspace/swiftcore/dropletqueue/logs/dropletqueue.out
-pid_file=/tmp/dropletqueue.pid
+log_file=/Users/bmuita/workspace/swiftcore/dropqueue/logs/dropqueue.log
+out_file=/Users/bmuita/workspace/swiftcore/dropqueue/logs/dropqueue.out
+pid_file=/tmp/dropqueue.pid
 num_workers=10
 batch_size=1000
 log_level=DEBUG
