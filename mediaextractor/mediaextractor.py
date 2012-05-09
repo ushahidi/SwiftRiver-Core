@@ -79,7 +79,7 @@ class MediaExtractorQueueWorker(Worker):
                 image = Image.open(f)
                 width, height = image.size
                 area = width * height
-                if area > 1000:
+                if area > 5000:
                     selection = {'url': url}
                     if area > cur_max:
                         cur_max = area
@@ -90,11 +90,11 @@ class MediaExtractorQueueWorker(Worker):
                         thumbnail = cStringIO.StringIO()
                         filename = basename(urlparse(url)[2])
                         extension = filename[-3:].lower()
-                        format = 'PNG'
-                        mime_type = 'image/png'
-                        if extension == 'jpeg' or extension == 'jpg':
-                            format = 'JPEG'
-                            mime_type = 'image/jpeg'
+                        format = 'JPEG'
+                        mime_type = 'image/jpeg'
+                        if extension == 'png':
+                            format = 'PNG'
+                            mime_type = 'image/png'
                         elif extension == 'gif':
                             format = 'GIF'
                             mime_type = 'image/gif'
