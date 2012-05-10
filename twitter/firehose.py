@@ -405,30 +405,30 @@ class FirehoseStreamListener(StreamListener):
                     self.__predicate_type)
                 self.__firehose_worker = None
 
-                payload = json.loads(data)
+            payload = json.loads(data)
 
-                # Twitter appears to be using RFC822 dates, parse them as such
-                drop_dict = {
-                    'channel': 'twitter',
-                    'identity_orig_id': payload['user']['id_str'],
-                    'identity_name': payload['user']['name'],
-                    'identity_username': payload['user']['screen_name'],
-                    'identity_avatar': payload['user']['profile_image_url'],
-                    'droplet_orig_id': payload['id_str'],
-                    'droplet_type': 'original',
-                    'droplet_title': payload['text'],
-                    'droplet_raw': payload['text'],
-                    'droplet_content': payload['text'],
-                    'droplet_locale': payload['user']['lang'],
-                    'droplet_date_pub': time.strftime(
-                                            '%Y-%m-%d %H:%M:%S',
-                                            rfc822.parsedate(
-                                                payload['created_at']))}
+            # Twitter appears to be using RFC822 dates, parse them as such
+            drop_dict = {
+                'channel': 'twitter',
+                'identity_orig_id': payload['user']['id_str'],
+                'identity_name': payload['user']['name'],
+                'identity_username': payload['user']['screen_name'],
+                'identity_avatar': payload['user']['profile_image_url'],
+                'droplet_orig_id': payload['id_str'],
+                'droplet_type': 'original',
+                'droplet_title': payload['text'],
+                'droplet_raw': payload['text'],
+                'droplet_content': payload['text'],
+                'droplet_locale': payload['user']['lang'],
+                'droplet_date_pub': time.strftime(
+                                        '%Y-%m-%d %H:%M:%S',
+                                        rfc822.parsedate(
+                                            payload['created_at']))}
 
-                # Spawn a predicate match worker
-                FilterPredicateMatcher(self.drop_publisher,
-                                       self.__predicate_list,
-                                       drop_dict).start()
+            # Spawn a predicate match worker
+            FilterPredicateMatcher(self.drop_publisher,
+                                   self.__predicate_list,
+                                   drop_dict).start()
         elif 'delete' in data:
             status = json.loads(data)['delete']['status']
             status_id, user_id = status['id_str'], status['user_id_str']
