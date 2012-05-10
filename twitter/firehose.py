@@ -456,7 +456,8 @@ class FirehoseStreamListener(StreamListener):
 
     def on_error(self, status_code):
         """Called when a non-200 status code is returned"""
-        return False
+        log.error("Received status %s. Retrying in 10s..." % status_code)
+        return True
 
     def on_timeout(self):
         """Called when stream connection times out"""
