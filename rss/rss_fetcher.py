@@ -11,7 +11,7 @@ If the scheduler requests a url from the cache, the fetcher will return
 droplets form the cache if available of do a HTTP request if there are not
 droplets for the url in the cache.
 
-Copyright (c) 2012 Ushahidi. All rights reserved. 
+Copyright (c) 2012 Ushahidi. All rights reserved.
 """
 
 import sys
@@ -44,8 +44,8 @@ class RssFetcherWorker(Worker):
         """Process a URL"""
         routing_key, delivery_tag, body = self.job_queue.get(True)
         message = json.loads(body)
-        log.info(" %s fetching %s" % (self.name, message['url'])) 
-        
+        log.info(" %s fetching %s" % (self.name, message['url']))
+
         cache_found = False
         if message.get('use_cache', False):
             c = self.get_cursor()
@@ -68,7 +68,7 @@ class RssFetcherWorker(Worker):
                 self.drop_publisher.publish(drop)
 
             c.close()
-        
+
         drops = []
         if not (message.get('use_cache', False) and cache_found):
             # Fetch the feed and use etag/modified headers if they
@@ -106,27 +106,31 @@ class RssFetcherWorker(Worker):
                     content = entry.summary
 
                 # Build out the drop
+                droplet_orig_id_str = (entry.get('link', '') +
+                                       entry.get('id', ''))
+                # Date when the article was published
+                droplet_date_pub = time.strftime('%Y-%m-%d %H:%M:%S',
+                                                 entry.get('date_parsed',
+                                                           time.gmtime()))
                 drop = {
                     'channel': 'rss',
                     'river_id': message['river_ids'],
                     'identity_orig_id': message['url'],
-                    'identity_username' : d.feed.get('link', message['url']),
+                    'identity_username': d.feed.get('link', message['url']),
                     'identity_name': identity_name,
                     'identity_avatar': avatar,
-                    'droplet_orig_id' : hashlib.md5(entry.get('link', '') + entry.get('id', '')).hexdigest(),
+                    'droplet_orig_id': hashlib.md5(
+                        droplet_orig_id_str).hexdigest(),
                     'droplet_type': 'original',
                     'droplet_title': entry.get('title', None),
                     'droplet_content': content,
-                    'droplet_raw': content,
                     'droplet_locale': locale,
-                    'droplet_date_pub': time.strftime('%Y-%m-%d %H:%M:%S', 
-                                                     entry.get('date_parsed',
-                                                               time.gmtime()))
-                }
+                    'droplet_date_pub': droplet_date_pub}
 
                 #log.debug("Drop: %r" % drop)
-                drops.append((message['url'], 
-                              time.mktime(entry.get('date_parsed',time.gmtime())),
+                drops.append((message['url'],
+                              time.mktime(entry.get('date_parsed',
+                                                    time.gmtime())),
                               pickle.dumps(drop)))
 
                 self.drop_publisher.publish(drop)
@@ -138,12 +142,11 @@ class RssFetcherWorker(Worker):
                 'last_fetch_modified': d.get('modified',
                                              message['last_fetch_modified']),
                 'last_fetch_etag': d.get('etag', message['last_fetch_etag']),
-                'last_fetch_time': int(time.mktime(time.gmtime()))
-            })
-            
+                'last_fetch_time': int(time.mktime(time.gmtime()))})
+
         self.confirm_queue.put(delivery_tag, False)
         log.info(" %s done fetching %s" % (self.name, message['url']))
-        
+
         # Add new drops to our local cache
         if len(drops):
             c = self.get_cursor()
@@ -179,11 +182,11 @@ class RssFetcherWorker(Worker):
 
         cursor = None
         while not cursor:
-            try:        
+            try:
                 if not self.db:
                     self.db = MySQLdb.connect(host=self.db_config['host'],
                                               port=self.db_config['port'],
-                                              passwd=self.db_config['pass'], 
+                                              passwd=self.db_config['pass'],
                                               user=self.db_config['user'],
                                               db=self.db_config['database'])
 
@@ -192,14 +195,14 @@ class RssFetcherWorker(Worker):
             except MySQLdb.OperationalError:
                 log.error(" error connecting to the database, retrying")
                 time.sleep(60 + random.randint(0, 120))
-        
+
         return cursor
 
 
 class ResponsePublisher(Publisher):
 
     def __init__(self, mq_host):
-        Publisher.__init__(self, "RSS Fetch Response Publisher", mq_host, 
+        Publisher.__init__(self, "RSS Fetch Response Publisher", mq_host,
                            queue_name='RSS_FETCH_RESPONSE', durable=False)
 
 
@@ -215,10 +218,10 @@ class RssFetcherDaemon(Daemon):
         self.db_config = db_config
 
     def run(self):
-        try:            
+        try:
             consumer = Consumer("rss-fetcher-consumer", self.mq_host,
-                                     'RSS_FETCH_QUEUE',
-                                     {'prefetch_count': self.num_workers})
+                                'RSS_FETCH_QUEUE',
+                                {'prefetch_count': self.num_workers})
 
             drop_publisher = DropPublisher(mq_host)
             response_publisher = ResponsePublisher(mq_host)

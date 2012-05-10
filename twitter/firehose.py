@@ -378,7 +378,8 @@ class FirehoseStreamListener(StreamListener):
         of the internal predicate list
         """
 
-        # NOTE: Duplicate river_ids will be filtered out by the flattening step
+        # NOTE: Duplicate river_ids will be filtered out by the
+        # flattening step
         for k, v in updated.iteritems():
             for p, r in v.iteritems():
                 # Compute diff of river ids and extend by the result
@@ -408,6 +409,9 @@ class FirehoseStreamListener(StreamListener):
             payload = json.loads(data)
 
             # Twitter appears to be using RFC822 dates, parse them as such
+            droplet_date_pub = time.strftime('%Y-%m-%d %H:%M:%S',
+                                             rfc822.parsedate(
+                                                payload['created_at']))
             drop_dict = {
                 'channel': 'twitter',
                 'identity_orig_id': payload['user']['id_str'],
@@ -417,13 +421,9 @@ class FirehoseStreamListener(StreamListener):
                 'droplet_orig_id': payload['id_str'],
                 'droplet_type': 'original',
                 'droplet_title': payload['text'],
-                'droplet_raw': payload['text'],
                 'droplet_content': payload['text'],
                 'droplet_locale': payload['user']['lang'],
-                'droplet_date_pub': time.strftime(
-                                        '%Y-%m-%d %H:%M:%S',
-                                        rfc822.parsedate(
-                                            payload['created_at']))}
+                'droplet_date_pub': droplet_date_pub}
 
             # Spawn a predicate match worker
             FilterPredicateMatcher(self.drop_publisher,
@@ -446,12 +446,13 @@ class FirehoseStreamListener(StreamListener):
 
     def on_delete(self, status_id, user_id):
         """Called when a delete notice arrives for a status"""
-        log.info("Delete Twitter droplet. droplet_orig_id: %s, identity_orig_id %s"
-                 % (status_id, user_id))
+        log.info("Delete tweet. droplet_orig_id: %s, identity_orig_id %s" %
+                 (status_id, user_id))
 
     def on_limit(self, track):
         """Called when a limitation notice arrives"""
-        log.info("Streaming Rate Limiting: # of rate-limited statuses %s" % track)
+        log.info("Streaming Rate Limiting: # of rate-limited statuses %s" %
+                 track)
 
     def on_error(self, status_code):
         """Called when a non-200 status code is returned"""
@@ -459,7 +460,8 @@ class FirehoseStreamListener(StreamListener):
 
     def on_timeout(self):
         """Called when stream connection times out"""
-        return
+        log.info("Firehose has timed out. Will reconnect in 5s...")
+        return True
 
 
 if __name__ == '__main__':
@@ -491,20 +493,25 @@ if __name__ == '__main__':
 
             # OAuth settings for exclusive use of track predicates
             'track_auth': {
-                'consumer_key': config.get('track_twitter_api', 'consumer_key'),
-                'consumer_secret': config.get('track_twitter_api', 'consumer_secret'),
-                'token_key': config.get('track_twitter_api', 'token_key'),
-                'token_secret': config.get('track_twitter_api', 'token_secret')
-            },
+                'consumer_key': config.get('track_twitter_api',
+                                           'consumer_key'),
+                'consumer_secret': config.get('track_twitter_api',
+                                              'consumer_secret'),
+                'token_key': config.get('track_twitter_api',
+                                        'token_key'),
+                'token_secret': config.get('track_twitter_api',
+                                           'token_secret')},
 
             # OAuth settings for exclusive use of follow predicates
             'follow_auth': {
-                'consumer_key': config.get('follow_twitter_api', 'consumer_key'),
-                'consumer_secret': config.get('follow_twitter_api', 'consumer_secret'),
-                'token_key': config.get('follow_twitter_api', 'token_key'),
-                'token_secret': config.get('follow_twitter_api', 'token_secret')
-            }
-        }
+                'consumer_key': config.get('follow_twitter_api',
+                                           'consumer_key'),
+                'consumer_secret': config.get('follow_twitter_api',
+                                               'consumer_secret'),
+                'token_key': config.get('follow_twitter_api',
+                                        'token_key'),
+                'token_secret': config.get('follow_twitter_api',
+                                           'token_secret')}}
 
         # Create the daemon
         daemon = TwitterFirehose(pidfile, stdout, options)
