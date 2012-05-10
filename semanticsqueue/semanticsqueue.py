@@ -25,19 +25,21 @@ from swiftriver import Worker, Consumer, Daemon, DropPublisher
 
 
 class SemanticsQueueWorker(Worker):
-    
-    def __init__(self, name, job_queue, confirm_queue, drop_publisher, api_url):
+
+    def __init__(self, name, job_queue, confirm_queue, drop_publisher,
+                 api_url):
         self.drop_publisher = drop_publisher
         self.api_url = api_url
         self.h = Http()
         Worker.__init__(self, name, job_queue, confirm_queue)
-        
+
     def work(self):
         """POSTs the droplet to the semantics API"""
         routing_key, delivery_tag, body = self.job_queue.get(True)
         droplet = json.loads(body)
-        log.info(" %s droplet received with id %d" % (self.name, droplet.get('id', 0)))
-        
+        log.info(" %s droplet received with id %d" %
+                 (self.name, droplet.get('id', 0)))
+
         #
         # nltk.clean_html() implementation
         # Credits - NLTK Team - <http://www.nltk.org>
@@ -63,65 +65,71 @@ class SemanticsQueueWorker(Worker):
         # Finally, UTF-8 encode the payload before submitting it to the
         # tagging API
         droplet_raw = droplet_raw.strip().encode('utf-8', 'ignore')
-        
+
         if droplet_raw: # Not empty after stripping tags
             post_data = dict(text=droplet_raw)
-            #log.debug(" %s post_data = %r" % (self.name, urlencode(post_data)))
             headers = {'Content-type': 'application/x-www-form-urlencoded'}
-            
+
             resp = content = None
-            
+
             while not resp:
                 try:
-                    resp, content = self.h.request(self.api_url, 'POST', body=urlencode(post_data), headers=headers)
-                    
+                    resp, content = self.h.request(self.api_url, 'POST',
+                                                   body=urlencode(post_data),
+                                                   headers=headers)
+
                     # If no OK response, keep retrying
                     if resp.status != 200:
-                        log.error(" %s NOK response from the API (%d), retrying." % (self.name, resp.status))
+                        log.error(
+                            " %s NOK response from the API (%d), retrying." %
+                            (self.name, resp.status))
                         resp = content = None
                         time.sleep(60)
                 except socket.error, msg:
-                    log.error("%s Error communicating with api(%s). Retrying" % (self.name, msg))
+                    log.error(
+                        "%s Error communicating with api(%s). Retrying" %
+                        (self.name, msg))
                     time.sleep(60) #Retry after 60 seconds
-            
+
             log.debug('%s sematics API said %r' % (self.name, content))
             if content:
                 response = json.loads(content)
-                
+
                 if response.get('status') == 'OK':
                     semantics = response['results']
-                    
-                    if semantics.has_key('location'):
+
+                    if 'location' in semantics:
                         droplet['places'] = []
                         for place in semantics['location']:
                             droplet['places'].append({
                                 'place_name': place['place_name'],
                                 'latitude': place['coordinates']['latitude'],
                                 'longitude': place['coordinates']['longitude'],
-                                'source': 'gisgraphy'
-                            })
+                                'source': 'gisgraphy'})
+
                         # Remove gpe items and return the rest as tags
                         del(semantics['location'])
-                    
+
                     droplet['tags'] = []
                     for k, v in semantics.iteritems():
                         for tag in semantics[k]:
                             droplet['tags'].append({
                                 'tag_name': tag,
-                                'tag_type': k
-                            })
-                    
-                    log.debug('%s droplet meta = %r, %r' % (self.name, droplet.get('tags'), droplet.get('places')))
-                
+                                'tag_type': k})
+
+                    log.debug('%s droplet meta = %r, %r' %
+                              (self.name, droplet.get('tags'),
+                               droplet.get('places')))
+
         # Send back the updated droplet to the droplet queue for updating
         droplet['semantics_complete'] = True
-        self.drop_publisher.publish(droplet)                             
-                
+        self.drop_publisher.publish(droplet)
+
         # Confirm delivery only once droplet has been passed
         # for metadata extraction
         self.confirm_queue.put(delivery_tag, False)
         log.info(" %s finished processing" % (self.name,))
-        
+
 
 class SemanticsQueueDaemon(Daemon):
 
@@ -132,26 +140,26 @@ class SemanticsQueueDaemon(Daemon):
         self.api_url = api_url
         self.mq_host = mq_host
 
-    def run(self):        
+    def run(self):
         # Parameters to be passed on to the queue worker
         queue_name = 'SEMANTICS_QUEUE'
-        options = {'exchange_name': 'metadata', 
-                   'exchange_type': 'fanout', 
+        options = {'exchange_name': 'metadata',
+                   'exchange_type': 'fanout',
                    'durable_queue': True,
                    'prefetch_count': self.num_workers}
-        
-        drop_consumer = Consumer("semanticsqueue-consumer", self.mq_host, 
+
+        drop_consumer = Consumer("semanticsqueue-consumer", self.mq_host,
                                  'SEMANTICS_QUEUE', options)
         drop_publisher = DropPublisher(mq_host)
         for x in range(self.num_workers):
-            SemanticsQueueWorker("semanticsqueue-worker-" + str(x), 
-                                 drop_consumer.message_queue, 
+            SemanticsQueueWorker("semanticsqueue-worker-" + str(x),
+                                 drop_consumer.message_queue,
                                  drop_consumer.confirm_queue, drop_publisher,
                                  self.api_url)
-            
-        log.info("Workers started");
-        drop_consumer.join();
-        log.info("Exiting");
+
+        log.info("Workers started")
+        drop_consumer.join()
+        log.info("Exiting")
 
 
 if __name__ == "__main__":
@@ -170,8 +178,8 @@ if __name__ == "__main__":
 
         FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
         log.basicConfig(filename=log_file,
-            level=getattr(log, log_level.upper()),
-            format=FORMAT)
+                        level=getattr(log, log_level.upper()),
+                        format=FORMAT)
         # Create outfile if it does not exist
         file(out_file, 'a')
 
