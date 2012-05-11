@@ -437,11 +437,12 @@ class FirehoseStreamListener(StreamListener):
                                        self.__predicate_list,
                                        drop_dict).start()
         elif 'delete' in data:
-            status = json.loads(data)['delete']['status']
-            status_id, user_id = status['id_str'], status['user_id_str']
-            self.on_delete(status_id, user_id)
+            paylod = json.loads(data)
+            status = payload['delete']['status']
+            self.on_delete(status['id_str'], status['user_id_str'])
         elif 'limit' in data:
-            track = json.loads(data)['limit']['track']
+            payload = json.loads(data)
+            track = payload['limit']['track']
             self.on_limit(track)
         else:
             # Unknow status

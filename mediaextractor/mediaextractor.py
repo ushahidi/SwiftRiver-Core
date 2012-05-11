@@ -120,8 +120,12 @@ class MediaExtractorQueueWorker(Worker):
                         selection['thumbnails'] = [{'size': 200, 'url': thumbnail_url}]
                         self.cf_options['conn_pool'].put(cf_conn)
                     selected_images.append(selection)
-            except IOError, e:
+            except IOError, io:
                 pass
+            except Exception, e:
+                # General (unknown/unexpected) exceptions, log
+                log.exception(e)
+                log.error("Error fetching image from URL: %s" % url)
 
         # Add selected images to drop                            
         if selected_images:
