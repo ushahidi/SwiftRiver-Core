@@ -124,6 +124,7 @@ class RssFetcherWorker(Worker):
                     'droplet_type': 'original',
                     'droplet_title': entry.get('title', None),
                     'droplet_content': content,
+                    'droplet_raw': content,
                     'droplet_locale': locale,
                     'droplet_date_pub': droplet_date_pub}
 
