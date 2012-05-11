@@ -422,6 +422,7 @@ class FirehoseStreamListener(StreamListener):
                 'droplet_type': 'original',
                 'droplet_title': payload['text'],
                 'droplet_content': payload['text'],
+                'droplet_raw': payload['text'],
                 'droplet_locale': payload['user']['lang'],
                 'droplet_date_pub': droplet_date_pub}
 
