@@ -436,17 +436,19 @@ class FirehoseStreamListener(StreamListener):
                 FilterPredicateMatcher(self.drop_publisher,
                                        self.__predicate_list,
                                        drop_dict).start()
-        elif 'delete' in data:
-            paylod = json.loads(data)
-            status = payload['delete']['status']
-            self.on_delete(status['id_str'], status['user_id_str'])
-        elif 'limit' in data:
-            payload = json.loads(data)
-            track = payload['limit']['track']
-            self.on_limit(track)
         else:
-            # Unknow status
-            pass
+            try:
+                payload = json.loads(data)
+                if 'delete' in payload:
+                    status = payload['delete']['status']
+                    self.on_delete(status['id_str'], status['user_id_str'])
+                elif 'limit' in payload:
+                    track = payload['limit']['track']
+                    self.on_limit(track)
+            except Exception, exception:
+                # The data delivered by the streamin API could not be serialized
+                # into a JSON object, ignore error
+                pass
 
     def on_status(self, status):
         """Called when a new status arrives"""
