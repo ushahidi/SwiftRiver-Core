@@ -397,7 +397,8 @@ class FirehoseStreamListener(StreamListener):
     def on_data(self, data):
         """Called when raw data is received from the connection"""
 
-        if 'in_reply_to_status_id' in data:
+        if ('in_reply_to_status_id' in data and
+            'retweeted_status' not in data):
             if self.__firehose_worker is not None:
                 # Disconnect the current firehose connection and kill
                 # reference to the firehose worker thread
@@ -438,8 +439,8 @@ class FirehoseStreamListener(StreamListener):
             track = json.loads(data)['limit']['track']
             self.on_limit(track)
         else:
-            # Unhandled case, log
-            log.info("Unknown status in payload: %r" % data)
+            # Unknow status
+            pass
 
     def on_status(self, status):
         """Called when a new status arrives"""
