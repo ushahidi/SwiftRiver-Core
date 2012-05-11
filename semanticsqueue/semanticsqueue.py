@@ -49,7 +49,7 @@ class SemanticsQueueWorker(Worker):
         droplet_raw = re.sub(
             r"(?is)<(script|style).*?>.*?(</\1)",
             "",
-            droplet['droplet_content'].strip())
+            droplet['droplet_raw'].strip())
 
         # Remove HTML comments. Do this before removing HTML tags because
         # comments can contain '>' characters
