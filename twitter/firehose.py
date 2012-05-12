@@ -159,19 +159,29 @@ class TwitterFirehose(Daemon):
         t = self.__get_filter_predicates(self.predicates)
         self.track, self.follow = t[0], t[1]
 
-        if self.track is not None and 'trac' in self.auth:
-            log.info("Reconnecting with updated track predicates: %r" % t[0])
+        # Track predicates
+        if 'track' in self.auth:
+            if self.track is not None:
+                log.info("Reconnecting with updated track predicates: %r" %
+                          t[0])
 
-            if self.__init_firehose('track', self.predicates, True):
-                track_stream = self.__reconnect_streams['track']
-                track_stream.filter(None, self.track, True)
+                if self.__init_firehose('track', self.predicates, True):
+                    track_stream = self.__reconnect_streams['track']
+                    track_stream.filter(None, self.track, True)
+            else:
+                self.disconnect_firehose('track')
 
-        if self.follow is not None and 'follow' in self.auth:
-            log.info("Reconnecting with updated follow predicates: %r" % t[1])
+        # Follow predicates
+        if 'follow' in self.auth:
+            if self.follow is not None:
+                log.info("Reconnecting with updated follow predicates: %r" %
+                         t[1])
 
-            if self.__init_firehose('follow', self.predicates, True):
-                follow_stream = self.__reconnect_streams['follow']
-                follow_stream.filter(self.follow, None, True)
+                if self.__init_firehose('follow', self.predicates, True):
+                    follow_stream = self.__reconnect_streams['follow']
+                    follow_stream.filter(self.follow, None, True)
+            else:
+                self.disconnect_firehose('follow')
 
     def disconnect_firehose(self, predicate_type):
         """ Given a predicate type , disconnects its current
@@ -285,7 +295,6 @@ class TwitterFirehose(Daemon):
         if 'message' in predicates and predicates['message'] == 'replace':
             self.predicates = dict(predicates['data'])
             self.firehose_reconnect()
-
             return
 
         # Get the new follow and track predicates
@@ -446,8 +455,8 @@ class FirehoseStreamListener(StreamListener):
                     track = payload['limit']['track']
                     self.on_limit(track)
             except Exception, exception:
-                # The data delivered by the streamin API could not be serialized
-                # into a JSON object, ignore error
+                # The data delivered by the streamin API could not be
+                # serialized into a JSON object, ignore error
                 pass
 
     def on_status(self, status):
