@@ -292,8 +292,8 @@ class RssFetchScheduler(Daemon):
                    'durable_exchange':  True,
                    'prefetch_count': self.num_channel_update_workers}
         channel_update_consumer = Consumer("channel-update-consumer",
-                                             self.mq_host,
-                                             'RSS_UPDATE_QUEUE', options)
+                                           self.mq_host,
+                                           'RSS_UPDATE_QUEUE', options)
 
         for x in range(self.num_channel_update_workers):
             ChannelUpdateHandler("channel-handler-" + str(x),

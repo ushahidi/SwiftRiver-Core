@@ -162,26 +162,32 @@ class TwitterFirehose(Daemon):
         # Track predicates
         if 'track' in self.auth:
             if self.track is not None:
-                log.info("Reconnecting with updated track predicates: %r" %
-                          t[0])
+                if self.track_firehose_running:
+                    log.info(
+                        "Reconnecting with updated track predicates: %r" %
+                        t[0])
 
-                if self.__init_firehose('track', self.predicates, True):
-                    track_stream = self.__reconnect_streams['track']
-                    track_stream.filter(None, self.track, True)
-            else:
-                self.disconnect_firehose('track')
+                    if self.__init_firehose('track', self.predicates, True):
+                        track_stream = self.__reconnect_streams['track']
+                        track_stream.filter(None, self.track, True)
+                else:
+                    log.info("Stopping the track predicates stream")
+                    self.disconnect_firehose('track')
 
         # Follow predicates
         if 'follow' in self.auth:
             if self.follow is not None:
-                log.info("Reconnecting with updated follow predicates: %r" %
-                         t[1])
+                if self.follow_firehose_running:
+                    log.info(
+                        "Reconnecting with updated follow predicates: %r" %
+                        t[1])
 
-                if self.__init_firehose('follow', self.predicates, True):
-                    follow_stream = self.__reconnect_streams['follow']
-                    follow_stream.filter(self.follow, None, True)
-            else:
-                self.disconnect_firehose('follow')
+                    if self.__init_firehose('follow', self.predicates, True):
+                        follow_stream = self.__reconnect_streams['follow']
+                        follow_stream.filter(self.follow, None, True)
+                else:
+                    log.info("Stopping the follow predicates stream")
+                    self.disconnect_firehose('follow')
 
     def disconnect_firehose(self, predicate_type):
         """ Given a predicate type , disconnects its current
@@ -191,18 +197,20 @@ class TwitterFirehose(Daemon):
                  (predicate_type))
 
         s = self.streams[predicate_type]
-        s.disconnect()
 
-        # Set the active streams and listeners
-        active_listener = self.__reconnect_listeners[predicate_type]
-        active_stream = self.__reconnect_streams[predicate_type]
+        if s is not None:
+            s.disconnect()
 
-        self.listeners[predicate_type] = active_listener
-        self.streams[predicate_type] = active_stream
+            # Set the active streams and listeners
+            active_listener = self.__reconnect_listeners[predicate_type]
+            active_stream = self.__reconnect_streams[predicate_type]
 
-        # Destroy the reconnect references
-        self.__reconnect_listeners[predicate_type] = None
-        self.__reconnect_streams[predicate_type] = None
+            self.listeners[predicate_type] = active_listener
+            self.streams[predicate_type] = active_stream
+
+            # Destroy the reconnect references
+            self.__reconnect_listeners[predicate_type] = None
+            self.__reconnect_streams[predicate_type] = None
 
     def run_firehose(self, message_queue, confirm_queue):
 
@@ -210,47 +218,49 @@ class TwitterFirehose(Daemon):
         while True:
             routing_key, delivery_tag, body = message_queue.get(True)
             predicates = json.loads(body)
-            log.info("Received filter predicates for the firehose")
 
             t = [None, None]
 
-            # Check for existing predicates
-            if len(self.predicates) == 0 and not 'message' in predicates:
+            # Update internal predicate registry
+            if len(predicates) > 0:
+                log.info("Received filter predicates for the firehose")
+
                 # Initialize internal predicate registry
                 self.predicates = dict(predicates)
 
                 # Get the list of keywords to track and people to follow
                 t = self.__get_filter_predicates(predicates)
 
-            # Check the stream for track predicates
-            if not self.track_firehose_running and t[0] is not None:
-                if self.__init_firehose('track', predicates):
-                    log.info("Initializing streaming of track predicates: %r"
-                                % t[0])
-
-                    self.track_firehose_running = True
-                    self.track = t[0]
-                    track_stream = self.streams['track']
-                    track_stream.filter(None, self.track, True)
-
-
-            # Check the stream for follow predicates
-            if not self.follow_firehose_running and t[1] is not None:
-                log.debug(t[1])
-                if self.__init_firehose('follow', predicates):
-                    log.info("Initializing streaming of follow predicates: %r"
-                             % t[1])
-
-                    self.follow_firehose_running = True
-
-                    self.follow = t[1]
-                    follow_stream = self.streams['follow']
-                    follow_stream.filter(self.follow, None, True)
-
-            # If either of the streams is running, update predicates
             if self.follow_firehose_running or self.track_firehose_running:
-                # Update the filter predicates
-                self.__update_filter_predicates(predicates)
+                # Attempt firehose reconnection with the new predicates
+                self.firehose_reconnect()
+            else:
+                # Neither the track nor follow streams are running
+                # Check the stream for track predicates
+                if not self.track_firehose_running and t[0] is not None:
+                    if self.__init_firehose('track', predicates):
+                        log.info(
+                            "Initializing streaming of track predicates: %r" %
+                            t[0])
+
+                        self.track_firehose_running = True
+                        self.track = t[0]
+                        track_stream = self.streams['track']
+                        track_stream.filter(None, self.track, True)
+
+                # Check the stream for follow predicates
+                if not self.follow_firehose_running and t[1] is not None:
+                    log.debug(t[1])
+                    if self.__init_firehose('follow', predicates):
+                        log.info(
+                            "Initializing streaming of follow predicates: %r" %
+                            t[1])
+
+                        self.follow_firehose_running = True
+
+                        self.follow = t[1]
+                        follow_stream = self.streams['follow']
+                        follow_stream.filter(self.follow, None, True)
 
             #Acknowledge delivery
             confirm_queue.put(delivery_tag, False)
@@ -286,61 +296,6 @@ class TwitterFirehose(Daemon):
             self.streams[predicate_type] = stream
 
         return True
-
-    def __update_filter_predicates(self, predicates):
-        """Gets the diff between the current set of predicates
-        and the newly submitted set
-        """
-
-        if 'message' in predicates and predicates['message'] == 'replace':
-            self.predicates = dict(predicates['data'])
-            self.firehose_reconnect()
-            return
-
-        # Get the new follow and track predicates
-        t = self.__get_filter_predicates(predicates)
-
-        track, follow = t[0], t[1]
-
-        # Computer the track diff
-        track_diff = []
-        if track is not None:
-            if self.track is None:
-                track_diff = track
-            else:
-                track_diff = list(set(track) - set(self.track))
-
-
-        # Compute the follow diff
-        follow_diff = []
-        if follow is not None:
-            if self.follow is None:
-                follow_diff = follow
-            else:
-                follow_diff = list(set(follow) - set(self.follow))
-
-        if len(track_diff) > 0 or len(follow_diff) > 0:
-            # Update the list of predicates and reconnect
-            for k, v in predicates.iteritems():
-                for m, n in v.iteritems():
-                    try:
-                        L = self.predicates[k].get(m, [])
-                        L[len(L):] = n
-                        self.predicates[k][m] = L
-                    except KeyError:
-                        self.predicates[k] = {m: n}
-
-            self.firehose_reconnect()
-        elif len(track_diff) == 0 and len(follow_diff) == 0:
-            # Update the river ids for each of the listeners
-
-            a, b = self.listeners['track'], self.listeners['follow']
-
-            if a is not None:
-                a.update_predicate_river_ids(predicates)
-
-            if b is not None:
-                b.update_predicate_river_ids(predicates)
 
     def __get_filter_predicates(self, predicates):
         """Given a dictionary of predicates, returns lists
@@ -380,28 +335,6 @@ class FirehoseStreamListener(StreamListener):
 
         # Flatten the fiter predicates
         self.__predicate_list = utils.flatten_filter_predicates(predicates)
-
-    def update_predicate_river_ids(self, updated):
-        """Given a dictionary of predicates, determines which predicates
-        need to be updated with new rivers. Results in the modification
-        of the internal predicate list
-        """
-
-        # NOTE: Duplicate river_ids will be filtered out by the
-        # flattening step
-        for k, v in updated.iteritems():
-            for p, r in v.iteritems():
-                # Compute diff of river ids and extend by the result
-                try:
-                    L = self.__predicate_dict[k].get(p, [])
-                    L[len(L):] = list(set(r) - set(L))
-                    self.__predicate_dict[k][p] = L
-                except KeyError:
-                    self.__predicate_dict[k] = {p: r}
-
-        # Update the list
-        self.__predicate_list = utils.flatten_filter_predicates(
-            self.__predicate_dict)
 
     def on_data(self, data):
         """Called when raw data is received from the connection"""

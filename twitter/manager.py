@@ -37,10 +37,10 @@ class TwitterFirehoseManager(Daemon):
         self.__predicate_workers = num_workers
 
         # Filter predicates for the firehose
-        self.__predicates = {}
+        self.predicates = {}
 
         # Tracks whether the predicates have changed
-        self.__predicates_changed = False
+        self.predicates_changed = False
 
     def get_cursor(self):
         """ Returns a cursor object"""
@@ -73,11 +73,11 @@ class TwitterFirehoseManager(Daemon):
         river_id = payload['river_id']
 
         # Get the update target
-        update_target = self.__predicates.get(predicate_type, dict())
+        update_target = self.predicates.get(predicate_type, dict())
         current_target = dict(update_target)
 
         # Check for filter predicate limits
-        if not utils.allow_filter_predicate(self.__predicates, predicate_type):
+        if not utils.allow_filter_predicate(self.predicates, predicate_type):
             log.error("The predicate quota for %s is maxed out." %
                       predicate_type)
             return
@@ -86,12 +86,12 @@ class TwitterFirehoseManager(Daemon):
         self.__sanitize_filter_predicate(filter_predicate,
                                          update_target, river_id)
 
-        # set-list conversion
+        # set-to-list conversion
         for k, v in update_target.iteritems():
             update_target[k] = list(v)
 
         # Update internal list of predicates
-        self.__predicates[predicate_type] = update_target
+        self.predicates[predicate_type] = update_target
 
         publish_data = {}
         if len(current_target) == 0:
@@ -127,9 +127,51 @@ class TwitterFirehoseManager(Daemon):
 
         # Check if there's any data to be published
         if len(publish_data) > 0:
-            log.debug("Publishing new predicates to the firehose %r"
-                      % publish_data)
-            self.firehose_publisher.publish(publish_data)
+            with self.__lock:
+                self.predicates_changed = True
+
+    def delete_filter_predicate(self, payload):
+        """ Removes a predicate from the internal cache and from
+        firehose predicates list"""
+
+        predicate_key = self.__get_predicate_type(payload['key'])
+        filter_predicate = json.loads(payload['value'])['value']
+        river_id = payload['river_id']
+
+        delete_items = {}
+        self.__sanitize_filter_predicate(filter_predicate,
+                                         delete_items, river_id)
+
+        # Get the current set of predicates from memory
+        current_predicates = self.predicates.get(predicate_key, dict())
+
+        # Nothing to delete
+        if len(current_predicates) == 0:
+            return
+
+        # Remove the deleted items from predicate internal registry
+        for k, v in delete_items.iteritems():
+            # Rivers currently using the predicate
+            rivers = map(lambda x: int(x), current_predicates.get(k, []))
+
+            # Rivers the predicate has been deleted from
+            deleted_rivers = map(lambda x: int(x), v)
+
+            # Get the delta of the two sets of river ids
+            delta = list(set(rivers) - set(deleted_rivers))
+
+            if len(delta) == 0 and k in current_predicates:
+                # No rivers for that predicate, remove it
+                del current_predicates[k]
+            else:
+                current_predicates[k] = delta
+
+        log.info("Deleted filter predicate %s from river %s" %
+                 (filter_predicate, river_id))
+
+        self.predicates[predicate_key].update(current_predicates)
+        with self.__lock:
+            self.predicates_changed = True
 
     def __get_predicate_type(self, payload_key):
         """ Given the payload key, returns the predicate type"""
@@ -164,53 +206,6 @@ class TwitterFirehoseManager(Daemon):
 
             # Store the river id with that item
             update_target[term].add(river_id)
-
-    def delete_filter_predicate(self, payload):
-        # Remove the predicate from the internal cache and from
-        # firehose predicates list
-        predicate_key = self.__get_predicate_type(payload['key'])
-        filter_predicate = json.loads(payload['value'])['value']
-        river_id = payload['river_id']
-
-        delete_items = {}
-        self.__sanitize_filter_predicate(filter_predicate,
-                                         delete_items, river_id)
-
-        # Get the current set of predicates from memory
-        current_predicates = self.__predicates.get(predicate_key, dict())
-
-        # Nothing to delete
-        if len(current_predicates) == 0:
-            return
-
-        # Delete
-        for k, v in delete_items.iteritems():
-            # Rivers currently using the predicate
-            rivers = map(lambda x: int(x), current_predicates.get(k, []))
-
-            # Rivers the predicate has been deleted from
-            deleted_rivers = map(lambda x: int(x), v)
-
-            # Get the delta of the two sets of river ids
-            delta = list(set(rivers) - set(deleted_rivers))
-
-            if len(delta) == 0 and k in current_predicates:
-                # No rivers for that predicate, remove it
-                del current_predicates[k]
-            else:
-                current_predicates[k] = delta
-
-        log.info("Deleted filter predicate %s from river %s" %
-            (filter_predicate, river_id))
-
-        self.__predicates[predicate_key].update(current_predicates)
-
-        # Notify the firehose worker of the change
-        log.info("New filter predicates: %r" % json.dumps(self.__predicates))
-
-        self.firehose_publisher.publish({
-            'message': 'replace',
-            'data': self.__predicates})
 
     def __get_firehose_predicates(self):
         """Gets all the twitter channel options and classifies them
@@ -256,11 +251,12 @@ class TwitterFirehoseManager(Daemon):
     def run_manager(self):
         # Options to be passed to the predicate update workers
         while True:
-            if self.__predicates_changed:
+            if self.predicates_changed:
                 log.info("Placing filter predicates in the firehose queue %r"
-                         % self.__predicates)
-                self.firehose_publisher.publish(self.__predicates)
-                self.__predicates_changed = False
+                         % self.predicates)
+                self.firehose_publisher.publish(self.predicates)
+                with self.__lock:
+                    self.predicates_changed = False
             time.sleep(5)
 
     def run(self):
@@ -288,8 +284,8 @@ class TwitterFirehoseManager(Daemon):
                 self)
 
         # Get all the predicates from the database
-        self.__predicates = self.__get_firehose_predicates()
-        self.__predicates_changed = (len(self.__predicates) > 0)
+        self.predicates = self.__get_firehose_predicates()
+        self.predicates_changed = (len(self.predicates) > 0)
 
         self.run_manager()
 
