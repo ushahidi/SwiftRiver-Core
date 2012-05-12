@@ -134,7 +134,10 @@ class TwitterFirehoseManager(Daemon):
     def __get_predicate_type(self, payload_key):
         """ Given the payload key, returns the predicate type"""
 
-        return "follow" if payload_key.lower() == "person" else "track"
+        if payload_key.lower() == "person" or payload_key.lower() == "user":
+            return "follow"
+        else:
+            return "track"
 
     def __sanitize_filter_predicate(
             self, filter_predicate, update_target, river_id):
