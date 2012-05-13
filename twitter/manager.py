@@ -10,6 +10,9 @@ import time
 import utils
 from os.path import dirname, realpath
 from threading import Thread, RLock, Event
+from urllib import urlencode
+
+from httplib2 import Http
 
 import MySQLdb
 
@@ -36,6 +39,7 @@ class TwitterFirehoseManager(Daemon):
 
         self.__predicate_workers = num_workers
 
+        self.http = Http()
         # Filter predicates for the firehose
         self.predicates = {}
 
@@ -68,7 +72,7 @@ class TwitterFirehoseManager(Daemon):
         """ Adds a filter predicate to the firehose """
 
         # Grab essential data
-        predicate_type = self.__get_predicate_type(payload['key'])
+        predicate_type = self._get_predicate_type(payload['key'])
         filter_predicate = json.loads(payload['value'])['value']
         river_id = payload['river_id']
 
@@ -83,7 +87,7 @@ class TwitterFirehoseManager(Daemon):
             return
 
         # Proceed
-        self.__sanitize_filter_predicate(filter_predicate,
+        self._sanitize_filter_predicate(predicate_type, filter_predicate,
                                          update_target, river_id)
 
         # set-to-list conversion
@@ -134,16 +138,16 @@ class TwitterFirehoseManager(Daemon):
         """ Removes a predicate from the internal cache and from
         firehose predicates list"""
 
-        predicate_key = self.__get_predicate_type(payload['key'])
+        predicate_type = self._get_predicate_type(payload['key'])
         filter_predicate = json.loads(payload['value'])['value']
         river_id = payload['river_id']
 
         delete_items = {}
-        self.__sanitize_filter_predicate(filter_predicate,
+        self._sanitize_filter_predicate(predicate_type, filter_predicate,
                                          delete_items, river_id)
 
         # Get the current set of predicates from memory
-        current_predicates = self.predicates.get(predicate_key, dict())
+        current_predicates = self.predicates.get(predicate_type, dict())
 
         # Nothing to delete
         if len(current_predicates) == 0:
@@ -169,11 +173,11 @@ class TwitterFirehoseManager(Daemon):
         log.info("Deleted filter predicate %s from river %s" %
                  (filter_predicate, river_id))
 
-        self.predicates[predicate_key].update(current_predicates)
+        self.predicates[predicate_type].update(current_predicates)
         with self.__lock:
             self.predicates_changed = True
 
-    def __get_predicate_type(self, payload_key):
+    def _get_predicate_type(self, payload_key):
         """ Given the payload key, returns the predicate type"""
 
         if payload_key.lower() == "person" or payload_key.lower() == "user":
@@ -181,21 +185,25 @@ class TwitterFirehoseManager(Daemon):
         else:
             return "track"
 
-    def __sanitize_filter_predicate(
-            self, filter_predicate, update_target, river_id):
+    def _sanitize_filter_predicate(self, predicate_type, filter_predicate,
+                                   update_target, river_id):
         """Given a filter predicate, splits it, removes '#' and '@'
         and pushes it to the specified target"""
 
         for term in filter_predicate.split(","):
             term = term.lower().strip()
 
-            # Strip '@' and '#' off the filter predicate
+            # Strip '@' and '#' off the track predicate
             term = term[1:] if term[:1] == '@' else term
             term = term[1:] if term[:1] == '#' else term
+            
+            if predicate_type == 'follow':
+                # User lookup via the API
+                term = self._get_twitter_user_id(term)
 
             # As per the streaming API guidelines, terms should be 60 chars
             # long at most
-            if  len(term) > 60:
+            if  term == False or len(term) > 60:
                 continue
 
             if not term in update_target:
@@ -207,7 +215,7 @@ class TwitterFirehoseManager(Daemon):
             # Store the river id with that item
             update_target[term].add(river_id)
 
-    def __get_firehose_predicates(self):
+    def _get_firehose_predicates(self):
         """Gets all the twitter channel options and classifies them
         as track and follow predicates"""
 
@@ -222,20 +230,20 @@ class TwitterFirehoseManager(Daemon):
 
         predicates = {}
         for river_id, key, value in c.fetchall():
-            predicate_key = self.__get_predicate_type(key)
+            predicate_type = self._get_predicate_type(key)
 
-            if not predicate_key in predicates:
-                predicates[predicate_key] = {}
+            if not predicate_type in predicates:
+                predicates[predicate_type] = {}
 
-            if utils.allow_filter_predicate(predicates, predicate_key):
-                update_target = predicates[predicate_key]
+            if utils.allow_filter_predicate(predicates, predicate_type):
+                update_target = predicates[predicate_type]
 
                 # Get filter predicate and submit it for sanitization
                 filter_predicate = json.loads(value)['value']
-                self.__sanitize_filter_predicate(filter_predicate,
+                self._sanitize_filter_predicate(predicate_type, filter_predicate,
                                                  update_target, river_id)
 
-                predicates[predicate_key] = update_target
+                predicates[predicate_type] = update_target
             else:
                 break
 
@@ -257,7 +265,7 @@ class TwitterFirehoseManager(Daemon):
                 self.firehose_publisher.publish(self.predicates)
                 with self.__lock:
                     self.predicates_changed = False
-            time.sleep(5)
+            time.sleep(8)
 
     def run(self):
         log.info("Twitter Firehose Manager started")
@@ -284,10 +292,33 @@ class TwitterFirehoseManager(Daemon):
                 self)
 
         # Get all the predicates from the database
-        self.predicates = self.__get_firehose_predicates()
+        self.predicates = self._get_firehose_predicates()
         self.predicates_changed = (len(self.predicates) > 0)
 
         self.run_manager()
+
+    def _get_twitter_user_id(self, screen_name):
+        """Given a screen name, looks up the ID of the user. Returns, the id
+        if found, False otherwise"""
+        
+        # TODO: Cache the user ids against the screen names
+        try:
+            url = 'http://api.twitter.com/1/users/show.json?screen_name=%s'
+
+            resp, content = self.http.request(url % screen_name, 'GET')
+            if resp.status != 200:
+                log.error("NOK response (%d) received from the Twitter API" %
+                          resp.status)
+                return False
+            else:
+                payload = json.loads(content)
+                if 'id_str' in payload:
+                    # TODO: Update the cache
+                    return payload['id_str']
+                else:
+                    return False
+        except socket.error, msg:
+            log.error("Error communicating with the Twitter API %s" % msg)
 
 
 class FirehosePublisher(Publisher):

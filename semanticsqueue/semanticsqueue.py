@@ -81,7 +81,7 @@ class SemanticsQueueWorker(Worker):
                     # If no OK response, keep retrying
                     if resp.status != 200:
                         log.error(
-                            " %s NOK response from the API (%d), retrying." %
+                            "%s NOK response from the API (%d), retrying." %
                             (self.name, resp.status))
                         resp = content = None
                         time.sleep(60)
