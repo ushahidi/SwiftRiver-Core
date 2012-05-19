@@ -281,21 +281,23 @@ class TwitterFirehose(Daemon):
                 if not self.track_stream_running and t[0] is not None:
                     self.track_stream = self._init_firehose(
                         'track', predicates)
-
-                    log.info("Begin streaming track predicates: %r" % t[0])
-                    self.track = t[0]
-                    self.track_stream.filter(None, self.track, True)
-                    self.track_stream_running = True
+                    if self.track_stream is not None:
+                        log.info("Begin streaming track predicates: %r" %
+                                 t[0])
+                        self.track = t[0]
+                        self.track_stream.filter(None, self.track, True)
+                        self.track_stream_running = True
 
                 # Check the stream for follow predicates
                 if not self.follow_stream_running and t[1] is not None:
                     self.follow_stream = self._init_firehose(
                         'follow', predicates)
-
-                    log.info("Begin streaming follow predicates: %r" % t[1])
-                    self.follow = t[1]
-                    self.follow_stream.filter(self.follow, None, True)
-                    self.follow_stream_running = True
+                    if self.follow_stream is not None:
+                        log.info("Begin streaming follow predicates: %r" %
+                                 t[1])
+                        self.follow = t[1]
+                        self.follow_stream.filter(self.follow, None, True)
+                        self.follow_stream_running = True
 
             #Acknowledge delivery
             confirm_queue.put(delivery_tag, False)
@@ -526,7 +528,7 @@ if __name__ == '__main__':
                 'consumer_key': config.get('follow_twitter_api',
                                            'consumer_key'),
                 'consumer_secret': config.get('follow_twitter_api',
-                                               'consumer_secret'),
+                                              'consumer_secret'),
                 'token_key': config.get('follow_twitter_api',
                                         'token_key'),
                 'token_secret': config.get('follow_twitter_api',

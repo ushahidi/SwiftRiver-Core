@@ -45,6 +45,9 @@ class TwitterFirehoseManager(Daemon):
 
         # Tracks whether the predicates have changed
         self.predicates_changed = False
+        
+        # in-memory cache for the twitter user ids
+        self.twitter_user_ids = {}
 
     def get_cursor(self):
         """ Returns a cursor object"""
@@ -301,7 +304,9 @@ class TwitterFirehoseManager(Daemon):
         """Given a screen name, looks up the ID of the user. Returns, the id
         if found, False otherwise"""
         
-        # TODO: Cache the user ids against the screen names
+        if screen_name in self.twitter_user_ids:
+            return self.twitter_user_ids[screen_name]
+
         try:
             url = 'http://api.twitter.com/1/users/show.json?screen_name=%s'
 
@@ -311,14 +316,18 @@ class TwitterFirehoseManager(Daemon):
                           resp.status)
                 return False
             else:
-                payload = json.loads(content)
-                if 'id_str' in payload:
-                    # TODO: Update the cache
-                    return payload['id_str']
-                else:
-                    return False
+                try:
+                    payload = json.loads(content)
+                    if 'id_str' in payload:
+                        self.twitter_user_ids[screen_name] = payload['id_str']
+                        return payload['id_str']
+                except ValueError, error:
+                    log.error("Invalid response from the Twitter API: %s" % error)
         except socket.error, msg:
             log.error("Error communicating with the Twitter API %s" % msg)
+
+        # If we get here, the lookup failed
+        return False
 
 
 class FirehosePublisher(Publisher):
