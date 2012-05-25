@@ -87,7 +87,7 @@ class MediaExtractorQueueWorker(Worker):
         cur_max = 0
         for url in images:
             try:
-                f = cStringIO.StringIO(urllib2.urlopen(url).read())
+                f = cStringIO.StringIO(urllib2.urlopen(url.encode('utf-8')).read())
                 image = Image.open(f)
                 width, height = image.size
                 area = width * height
@@ -120,12 +120,8 @@ class MediaExtractorQueueWorker(Worker):
                         selection['thumbnails'] = [{'size': 200, 'url': thumbnail_url}]
                         self.cf_options['conn_pool'].put(cf_conn)
                     selected_images.append(selection)
-            except IOError, io:
+            except IOError, e:
                 pass
-            except Exception, e:
-                # General (unknown/unexpected) exceptions, log
-                log.exception(e)
-                log.error("Error fetching image from URL: %s" % url)
 
         # Add selected images to drop                            
         if selected_images:
@@ -157,10 +153,13 @@ class MediaExtractorQueueWorker(Worker):
         if (re.search("\.(jpg|jpeg|png|gif)(?:[?#].*)?$", url, re.I)):
             image = url
         else:
-            image_service_url = self.get_image_service_url(url)
-            if image_service_url is not None:
-                image = image_service_url
-            else:
+            try:
+                image_service_url = self.get_image_service_url(url)
+                if image_service_url is not None:
+                    image = image_service_url
+                else:
+                    link = {'url': url}
+            except Exception, e:
                 link = {'url': url}
 
         return image, link
@@ -195,17 +194,17 @@ class MediaExtractorQueueWorker(Worker):
     def get_full_url(self, url):
         """Get the full URL but only do so if the link looks like a shortened
         url."""
-
-        domain = urlparse(url)[1]
-
-        if len(url) < 25 and len(domain) < 10:
-            h  = Http()
-            try:
+        
+        try:
+            domain = urlparse(url)[1]
+            
+            if len(url) < 25 and len(domain) < 10:
+                h  = Http()
                 resp, content = h.request(url, 'HEAD')
                 url = resp.get('content-location', url)
-            except Exception, e:
-                log.error(" %s error expanding url %s %r" %
-                          (self.name, url, e))
+        except Exception, e:
+            log.error(" %s error expanding url %s %r" %
+                      (self.name, url, e))
 
         return url
 

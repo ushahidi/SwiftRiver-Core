@@ -119,8 +119,9 @@ class RssFetcherWorker(Worker):
                     'identity_username': d.feed.get('link', message['url']),
                     'identity_name': identity_name,
                     'identity_avatar': avatar,
-                    'droplet_orig_id': hashlib.md5(
-                        droplet_orig_id_str).hexdigest(),
+                    'droplet_orig_id': hashlib.md5(droplet_orig_id_str
+                                                   .encode('utf-8'))
+                                                   .hexdigest(),
                     'droplet_type': 'original',
                     'droplet_title': entry.get('title', None),
                     'droplet_content': content,
