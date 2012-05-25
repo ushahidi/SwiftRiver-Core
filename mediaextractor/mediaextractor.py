@@ -113,7 +113,7 @@ class MediaExtractorQueueWorker(Worker):
                         image.save(thumbnail, format)
                         cf_conn = self.cf_options['conn_pool'].get()
                         container = cf_conn.get_container(self.cf_options['container'])
-                        cloudfile = container.create_object(hashlib.md5(url).hexdigest() + '_' + filename)
+                        cloudfile = container.create_object(hashlib.md5(url.encode('utf-8')).hexdigest() + '_' + filename)
                         cloudfile.content_type = mime_type
                         cloudfile.write(thumbnail.getvalue())
                         thumbnail_url = cloudfile.public_uri()
