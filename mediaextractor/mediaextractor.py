@@ -116,7 +116,7 @@ class MediaExtractorQueueWorker(Worker):
                         cloudfile = container.create_object(hashlib.md5(url.encode('utf-8')).hexdigest() + '_' + filename)
                         cloudfile.content_type = mime_type
                         cloudfile.write(thumbnail.getvalue())
-                        thumbnail_url = cloudfile.public_uri()
+                        thumbnail_url = cloudfile.public_ssl_uri()
                         selection['thumbnails'] = [{'size': 200, 'url': thumbnail_url}]
                         self.cf_options['conn_pool'].put(cf_conn)
                     selected_images.append(selection)
