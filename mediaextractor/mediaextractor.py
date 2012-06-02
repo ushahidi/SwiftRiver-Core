@@ -200,7 +200,7 @@ class MediaExtractorQueueWorker(Worker):
             domain = urlparse(url)[1]
             
             if len(url) < 25 and len(domain) < 10:
-                request = urllib2.Request(url)
+                request = urllib2.Request(url.encode('utf-8'))
                 request.get_method = lambda : 'HEAD'
                 response = urllib2.urlopen(request)
                 url = response.geturl()
