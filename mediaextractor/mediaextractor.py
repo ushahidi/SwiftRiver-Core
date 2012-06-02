@@ -20,6 +20,7 @@ import re
 import urllib2
 import cStringIO
 import hashlib
+import urllib2
 
 from PIL import Image
 from httplib2 import Http
@@ -199,9 +200,10 @@ class MediaExtractorQueueWorker(Worker):
             domain = urlparse(url)[1]
             
             if len(url) < 25 and len(domain) < 10:
-                h  = Http()
-                resp, content = h.request(url, 'HEAD')
-                url = resp.get('content-location', url)
+                request = urllib2.Request(url)
+                request.get_method = lambda : 'HEAD'
+                response = urllib2.urlopen(request)
+                url = response.geturl()
         except Exception, e:
             log.error(" %s error expanding url %s %r" %
                       (self.name, url, e))
