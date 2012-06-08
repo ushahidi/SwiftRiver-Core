@@ -108,11 +108,11 @@ class RiverExpiry(object):
                 expired_rivers[river_id] = token
                 url = rivers[river_id]['url']
                 rivers[river_id]['url'] = url + '/extend?token=' + token
-                continue
-
-            if data['is_candidate'] == 0:
-                rivers[river_id]['is_candiate'] = 1
-                candidates.append(river_id)
+            else:
+                if days_to_expiry > 0 and data['is_candidate'] == 0:
+                    candidates.append(river_id)
+                else:
+                    del rivers[river_id]
 
         # Shutdown expired rivers
         if len(expired_rivers) > 0:
