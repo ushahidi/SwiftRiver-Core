@@ -1,0 +1,17 @@
+[main]
+log_file=/Users/ekala/dev/SwiftRiver-Core/maintenance/logs/riverexpiry.log
+log_level=DEBUG
+mq_host=localhost
+
+[db]
+host=localhost
+port=3306
+user=
+pass=
+database=
+
+[email]
+sendmail=/usr/sbin/sendmail
+site_email=no-reply@swiftriver.beta
+expiry_warning=/Users/ekala/dev/SwiftRiver-Core/maintenance/config/expiry_warning
+expiry_notice=/Users/ekala/dev/SwiftRiver-Core/maintenance/config/expiry_notice
