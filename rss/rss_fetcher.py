@@ -128,6 +128,12 @@ class RssFetcherWorker(Worker):
                     'droplet_raw': content,
                     'droplet_locale': locale,
                     'droplet_date_pub': droplet_date_pub}
+                    
+                if 'link' in entry:
+                    drop['links'] = [{
+                        'url': entry.get('link'),
+                        'original_url': True
+                    }]
 
                 #log.debug("Drop: %r" % drop)
                 drops.append((message['url'],
