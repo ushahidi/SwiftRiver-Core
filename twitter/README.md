@@ -22,7 +22,7 @@ Installation of Required Libraries
 Ubuntu/Debian Installation
 -------------------------------------
 
-        $ sudo apt-get install python-pip python-mysqldb
+        $ sudo apt-get install python-pip python-mysqldb python-httplib2
         $ pip install pika
         $ pip install tweepy
         

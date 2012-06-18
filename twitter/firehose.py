@@ -13,11 +13,11 @@ import time
 import utils
 from multiprocessing import Pool
 from os.path import dirname, realpath
-from threading import Thread, Event
+from Queue import Queue
 
 from tweepy import OAuthHandler, Stream, StreamListener
 
-from swiftriver import Daemon, DropPublisher, Consumer
+from swiftriver import Daemon, DropPublisher, Consumer, Worker
 
 
 """
@@ -47,36 +47,33 @@ def predicate_match(L):
         return L[1] if occurrence >= len(search_pattern) else []
 
 
-class FilterPredicateMatcher(Thread):
+class FilterPredicateMatcher(Worker):
     """ Predicate matching thread"""
 
-    def __init__(self, drop_publisher, predicates, drop_dict,
+    def __init__(self, drop_publisher, predicates, drop_queue,
                  follow_match=False):
-        Thread.__init__(self)
 
         self.drop_publisher = drop_publisher
+        self.pool = Pool()
 
         # Internal predicate registry
         self.predicates = {} if follow_match else []
         self.follow_match = follow_match
 
-        search_string = drop_dict['droplet_content']
         for t in predicates:
             if self.follow_match:
                 self.predicates[t[0]] = t[1]
             else:
-                item = list(t)
-                item.append(search_string)
-                self.predicates.append(tuple(item))
+                self.predicates = predicates
 
-        self.drop_dict = dict(drop_dict)
+        Worker.__init__(self, "Predicate Matcher", drop_queue, None)
 
-    def run(self):
-        # Get a pool of processes as many as the cores in the system
+    def work(self):
+        drop = self.job_queue.get(True)
         river_ids = []
         if self.follow_match:
-            identity_orig_id = self.drop_dict['identity_orig_id']
-            in_reply_to_user_id = self.drop_dict['in_reply_to_user_id']
+            identity_orig_id = drop['identity_orig_id']
+            in_reply_to_user_id = drop['in_reply_to_user_id']
             
             if identity_orig_id in self.predicates:
                 river_ids = self.predicates[identity_orig_id]
@@ -84,15 +81,13 @@ class FilterPredicateMatcher(Thread):
             if in_reply_to_user_id in self.predicates:
                 river_ids += self.predicates[in_reply_to_user_id]
         else:
-            pool = Pool()
-            river_ids = pool.map(predicate_match, self.predicates)
-
-            # Terminate the workers
-            pool.close()
-            pool.join()
-
-            # Just to be sure
-            pool.terminate()
+            predicates = []
+            for t in self.predicates:
+                item = list(t)
+                item.append(drop['droplet_raw'])
+                predicates.append(tuple(item))
+            
+            river_ids = self.pool.map(predicate_match, predicates)
 
             # Flatten the river ids into a set
             river_ids = list(itertools.chain(*river_ids))
@@ -101,10 +96,10 @@ class FilterPredicateMatcher(Thread):
         if len(river_ids) > 0:
             # Log
             log.debug("Droplet content: %s, Rivers: %s" %
-                      (self.drop_dict['droplet_content'], river_ids))
+                      (drop['droplet_content'], river_ids))
 
-            self.drop_dict['river_id'] = river_ids
-            self.drop_publisher.publish(self.drop_dict)
+            drop['river_id'] = river_ids
+            self.drop_publisher.publish(drop)
 
 
 class TwitterFirehose(Daemon):
@@ -407,6 +402,13 @@ class FirehoseStreamListener(StreamListener):
 
         # Flatten the fiter predicates
         self.predicate_list = utils.flatten_filter_predicates(predicates)
+        
+        self.drop_queue = Queue()
+        # Spawn a predicate match worker
+        FilterPredicateMatcher(self.drop_publisher,
+                               self.predicate_list,
+                               self.drop_queue,
+                               self.follow_match)
 
     def on_data(self, data):
         """Called when raw data is received from the connection"""
@@ -432,7 +434,7 @@ class FirehoseStreamListener(StreamListener):
                 retweet_match = re.findall('^(RT\:?)\s*', droplet_content,
                                            re.I)
                 if len(retweet_match) == 0:
-                    drop_dict = {
+                    drop = {
                         'channel': 'twitter',
                         'identity_orig_id': payload['user']['id_str'],
                         'in_reply_to_user_id': payload['in_reply_to_user_id_str'],
@@ -446,12 +448,8 @@ class FirehoseStreamListener(StreamListener):
                         'droplet_raw': droplet_content,
                         'droplet_locale': payload['user']['lang'],
                         'droplet_date_pub': droplet_date_pub}
+                    self.drop_queue.put(drop, False)
 
-                    # Spawn a predicate match worker
-                    FilterPredicateMatcher(self.drop_publisher,
-                                           self.predicate_list,
-                                           drop_dict,
-                                           self.follow_match).start()
             elif 'delete' in payload:
                 status = payload['delete']['status']
                 self.on_delete(status['id_str'], status['user_id_str'])
