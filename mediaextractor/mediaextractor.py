@@ -123,6 +123,8 @@ class MediaExtractorQueueWorker(Worker):
                     selected_images.append(selection)
             except IOError, e:
                 pass
+            except BadStatusLine, e:
+                pass
 
         # Add selected images to drop                            
         if selected_images:
