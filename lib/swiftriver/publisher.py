@@ -58,10 +58,13 @@ class Publisher(Thread):
                 
                 while True:
                     item, callback = self.q.get(True)
-                    channel.basic_publish(exchange=self.exchange_name,
-                                          routing_key=self.routing_key,
-                                          properties=props,
-                                          body=json.dumps(item))
+                    try:
+                        channel.basic_publish(exchange=self.exchange_name,
+                                              routing_key=self.routing_key,
+                                              properties=props,
+                                              body=json.dumps(item))
+                    except UnicodeDecodeError, e:
+                        log.error("UnicodeDecodeError on drop %r" % item)
                     
                     if callback is not None:
                         callback(item)
