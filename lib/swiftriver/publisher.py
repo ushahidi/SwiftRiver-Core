@@ -27,8 +27,8 @@ class Publisher(Thread):
         self.start()
         log.info("%s started" % self.name)
 
-    def publish(self, item):
-        self.q.put(item, False)
+    def publish(self, item, callback = None):
+        self.q.put((item, callback), False)
 
     def run(self):
         connection = pika.BlockingConnection(
@@ -51,11 +51,14 @@ class Publisher(Thread):
             props = pika.BasicProperties(delivery_mode=2)
 
         while True:
-            item = self.q.get(True)
+            item, callback = self.q.get(True)
             channel.basic_publish(exchange=self.exchange_name,
                                   routing_key=self.routing_key,
                                   properties=props,
                                   body=json.dumps(item))
+            
+            if callback is not None:
+                callback(item)
 
 
 class DropPublisher(Publisher):

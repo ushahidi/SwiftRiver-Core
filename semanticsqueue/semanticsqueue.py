@@ -123,12 +123,18 @@ class SemanticsQueueWorker(Worker):
 
         # Send back the updated droplet to the droplet queue for updating
         droplet['semantics_complete'] = True
-        self.drop_publisher.publish(droplet)
+        
+        # Some internal data for our callback
+        droplet['_internal'] = {'delivery_tag': delivery_tag}
+        
+        self.drop_publisher.publish(droplet, self.confirm_drop)
 
+        log.info(" %s finished processing" % (self.name,))
+
+    def confirm_drop(self, drop):
         # Confirm delivery only once droplet has been passed
         # for metadata extraction
-        self.confirm_queue.put(delivery_tag, False)
-        log.info(" %s finished processing" % (self.name,))
+        self.confirm_queue.put(drop['_internal']['delivery_tag'], False)
 
 
 class SemanticsQueueDaemon(Daemon):

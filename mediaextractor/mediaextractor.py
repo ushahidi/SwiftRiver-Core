@@ -35,7 +35,7 @@ class MediaExtractorQueueWorker(Worker):
     def __init__(self, name, job_queue, confirm_queue, drop_publisher,
                  cf_options):
         self.drop_publisher = drop_publisher
-        self.cf_options = cf_options
+        self.cf_options = cf_options        
         Worker.__init__(self, name, job_queue, confirm_queue)
 
     def work(self):
@@ -139,13 +139,18 @@ class MediaExtractorQueueWorker(Worker):
 
         # Send back the updated droplet to the droplet queue for updating
         droplet['media_complete'] = True
+        
+        # Some internal data for our callback
+        droplet['_internal'] = {'delivery_tag': delivery_tag}
+        
+        self.drop_publisher.publish(droplet, self.confirm_drop)
 
-        self.drop_publisher.publish(droplet)
-
+        log.info(" %s finished processing" % (self.name,))
+        
+    def confirm_drop(self, drop):
         # Confirm delivery only once droplet has been passed
         # for metadata extraction
-        self.confirm_queue.put(delivery_tag, False)
-        log.info(" %s finished processing" % (self.name,))
+        self.confirm_queue.put(drop['_internal']['delivery_tag'], False)
 
     def parse_link(self, url):
         """Given a url, return the photo url from an image service or the url
