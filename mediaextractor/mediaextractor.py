@@ -21,9 +21,12 @@ import urllib2
 import cStringIO
 import hashlib
 import urllib2
+import socket
+import ssl
 
 from PIL import Image
 from httplib2 import Http
+from httplib import BadStatusLine
 from cloudfiles.connection import ConnectionPool
 import lxml.html
 
@@ -33,9 +36,10 @@ from swiftriver import Daemon, Consumer, Worker, DropPublisher
 class MediaExtractorQueueWorker(Worker):
 
     def __init__(self, name, job_queue, confirm_queue, drop_publisher,
-                 cf_options):
+                 cf_options, url_services):
         self.drop_publisher = drop_publisher
-        self.cf_options = cf_options        
+        self.cf_options = cf_options
+        self.url_services = url_services   
         Worker.__init__(self, name, job_queue, confirm_queue)
 
     def work(self):
@@ -122,9 +126,11 @@ class MediaExtractorQueueWorker(Worker):
                         self.cf_options['conn_pool'].put(cf_conn)
                     selected_images.append(selection)
             except IOError, e:
-                pass
+                log.error(" %s IOError on image %s %r" % (self.name, url, e))
             except BadStatusLine, e:
-                pass
+                log.error(" %s BadStatusLine on image %s %r" % (self.name, url, e))
+            except ValueError, e:
+                log.error(" %s ValueError on image %s %r" % (self.name, url, e))
 
         # Add selected images to drop                            
         if selected_images:
@@ -199,33 +205,69 @@ class MediaExtractorQueueWorker(Worker):
 
         return ret
 
-    def get_full_url(self, url):
-        """Get the full URL but only do so if the link looks like a shortened
-        url."""
+    def get_full_url(self, url, depth=1):
+        """Make a raw HTTP HEAD request to get the full URL from a know 
+        shortening service and shorten the result if it is also 
+        shortened."""
         
+        # Do a maximum of 5 recursions then give up
+        if not self.is_short_url(url) or depth > 5:
+            return url
+        
+        if not re.match("^https?://", url, re.I):
+            url = "http://" + url
+        status_line = None    
         try:
-            domain = urlparse(url)[1]
+            url_parts = urlparse(url)
+            port = 80
+            if url_parts.port is not None:
+                port = parts.port
+            elif url_parts.scheme == "https":
+                port = 443
+
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            if url_parts.scheme == "https":
+                s = ssl.wrap_socket(s)
+            s.connect((url_parts.hostname, port))
+            s.send("HEAD %s HTTP/1.1\r\n" % url_parts.path)
+            s.send("Host: %s\r\n" % url_parts.hostname)
+            s.send("user-agent: Swiftriver/0.2 (gzip)\r\n")
+            s.send("\r\n")
+            f = cStringIO.StringIO(s.recv(4096))
+            s.close()
+
+            # First line is status line
+            status_line = f.readline()
             
-            if len(url) < 25 and len(domain) < 10:
-                request = urllib2.Request(url.encode('utf-8'))
-                request.get_method = lambda : 'HEAD'
-                response = urllib2.urlopen(request)
-                url = response.geturl()
+            if re.match('^HTTP/\d\.\d\s(1|2|3)\d\d\s', status_line, re.I):
+                for line in f:
+                    m = re.match("^Location:\s(.+)\r\n", line, re.I)
+                    if m:
+                        url = m.group(1)
+            else:
+                log.debug(" %s bad status line %s" % (self.name, status_line))
+            f.close()
+            
+            return self.get_full_url(url, depth+1)
         except Exception, e:
             log.error(" %s error expanding url %s %r" %
                       (self.name, url, e))
 
         return url
+        
+    def is_short_url(self, url):
+        return urlparse(url)[1].lower().encode('utf-8') in self.url_services
 
 
 class MediaExtractorQueueDaemon(Daemon):
 
-    def __init__(self, num_workers, mq_host, cf_options, pid_file, out_file):
+    def __init__(self, num_workers, mq_host, cf_options, url_services, pid_file, out_file):
         Daemon.__init__(self, pid_file, out_file, out_file, out_file)
 
         self.num_workers = num_workers
         self.mq_host = mq_host
         self.cf_options = cf_options
+        self.url_services = url_services
 
     def run(self):
         options = {'exchange_name': 'metadata', 
@@ -240,7 +282,8 @@ class MediaExtractorQueueDaemon(Daemon):
             MediaExtractorQueueWorker("mediaextractor-worker-" + str(x), 
                                      drop_consumer.message_queue, 
                                      drop_consumer.confirm_queue, 
-                                     drop_publisher, self.cf_options)
+                                     drop_publisher, self.cf_options, 
+                                     self.url_services)
         log.info("Workers started")
 
         drop_consumer.join()
@@ -276,8 +319,12 @@ if __name__ == "__main__":
                         level=getattr(log, log_level.upper()), format=FORMAT)
 
         file(out_file, 'a') # Create outfile if it does not exist
+        
+        # Load URL shortening services
+        f = open(dirname(realpath(__file__)) + "/config/shorteners.dat")
+        url_services = [line.strip() for line in f.readlines()]
 
-        daemon = MediaExtractorQueueDaemon(num_workers, mq_host, cf_options,
+        daemon = MediaExtractorQueueDaemon(num_workers, mq_host, cf_options, url_services,
                                            pid_file, out_file)
         if len(sys.argv) == 2:
             if 'start' == sys.argv[1]:
