@@ -53,95 +53,96 @@ class MediaExtractorQueueWorker(Worker):
 
         links = []
         images = []
-
-        # Get the urls from the anchor and image tags in the drop 
-        media_tags = re.findall(
-            '<\s*(a|img)\s*[^>]*(?:(?:href|src)\s*=\s*"([^"]+))"[^>]*>',
-            droplet['droplet_raw'], re.I)
-
-        for match in media_tags:
-            tag, url = match
-            if tag == 'img':
-                images.append(url)
-            else:
+        
+        if droplet['droplet_raw']:
+            # Get the urls from the anchor and image tags in the drop 
+            media_tags = re.findall(
+                '<\s*(a|img)\s*[^>]*(?:(?:href|src)\s*=\s*"([^"]+))"[^>]*>',
+                droplet['droplet_raw'], re.I)
+            
+            for match in media_tags:
+                tag, url = match
+                if tag == 'img':
+                    images.append(url)
+                else:
+                    url = self.get_full_url(url)
+                    image, link = self.parse_link(url)
+                    if image:
+                        images.append(image)
+                    elif link:
+                        links.append(link)
+            
+            # Strip tags and get urls left in the html text
+            url_items = re.findall("(?:https?://[^\\s]+)", re.sub(r'<[^>]*>', '',
+                                   droplet['droplet_raw']).strip()) 
+            
+            for url in url_items:
                 url = self.get_full_url(url)
                 image, link = self.parse_link(url)
                 if image:
                     images.append(image)
                 elif link:
                     links.append(link)
+            
+            if links:
+                droplet['links'] = links
+            
+            # Get a droplet_image and remove too small images
+            droplet_image = None
+            selected_images = []
+            cur_max = 0
+            for url in images:
+                try:
+                    f = cStringIO.StringIO(urllib2.urlopen(url.encode('utf-8')).read())
+                    image = Image.open(f)
+                    width, height = image.size
+                    area = width * height
+                    if area > 5000:
+                        selection = {'url': url}
+                        if area > cur_max:
+                            cur_max = area
+                            droplet_image = url
+                        # Store thumbnail
+                        if self.cf_options['enabled']:
+                            image.thumbnail((200, 200), Image.ANTIALIAS)
+                            thumbnail = cStringIO.StringIO()
+                            filename = basename(urlparse(url)[2])
+                            extension = filename[-3:].lower()
+                            format = 'JPEG'
+                            mime_type = 'image/jpeg'
+                            if extension == 'png':
+                                format = 'PNG'
+                                mime_type = 'image/png'
+                            elif extension == 'gif':
+                                format = 'GIF'
+                                mime_type = 'image/gif'
+                            image.save(thumbnail, format)
+                            cf_conn = self.cf_options['conn_pool'].get()
+                            container = cf_conn.get_container(self.cf_options['container'])
+                            cloudfile = container.create_object(hashlib.md5(url.encode('utf-8')).hexdigest() + '_' + filename)
+                            cloudfile.content_type = mime_type
+                            cloudfile.write(thumbnail.getvalue())
+                            thumbnail_url = cloudfile.public_ssl_uri()
+                            selection['thumbnails'] = [{'size': 200, 'url': thumbnail_url}]
+                            self.cf_options['conn_pool'].put(cf_conn)
+                        selected_images.append(selection)
+                except IOError, e:
+                    log.error(" %s IOError on image %s %r" % (self.name, url, e))
+                except BadStatusLine, e:
+                    log.error(" %s BadStatusLine on image %s %r" % (self.name, url, e))
+                except ValueError, e:
+                    log.error(" %s ValueError on image %s %r" % (self.name, url, e))
 
-        # Strip tags and get urls left in the html text
-        url_items = re.findall("(?:https?://[^\\s]+)", re.sub(r'<[^>]*>', '',
-                               droplet['droplet_raw']).strip()) 
-
-        for url in url_items:
-            url = self.get_full_url(url)
-            image, link = self.parse_link(url)
-            if image:
-                images.append(image)
-            elif link:
-                links.append(link)
-
-        if links:
-            droplet['links'] = links
-
-        # Get a droplet_image and remove too small images
-        droplet_image = None
-        selected_images = []
-        cur_max = 0
-        for url in images:
-            try:
-                f = cStringIO.StringIO(urllib2.urlopen(url.encode('utf-8')).read())
-                image = Image.open(f)
-                width, height = image.size
-                area = width * height
-                if area > 5000:
-                    selection = {'url': url}
-                    if area > cur_max:
-                        cur_max = area
-                        droplet_image = url
-                    # Store thumbnail
-                    if self.cf_options['enabled']:
-                        image.thumbnail((200, 200), Image.ANTIALIAS)
-                        thumbnail = cStringIO.StringIO()
-                        filename = basename(urlparse(url)[2])
-                        extension = filename[-3:].lower()
-                        format = 'JPEG'
-                        mime_type = 'image/jpeg'
-                        if extension == 'png':
-                            format = 'PNG'
-                            mime_type = 'image/png'
-                        elif extension == 'gif':
-                            format = 'GIF'
-                            mime_type = 'image/gif'
-                        image.save(thumbnail, format)
-                        cf_conn = self.cf_options['conn_pool'].get()
-                        container = cf_conn.get_container(self.cf_options['container'])
-                        cloudfile = container.create_object(hashlib.md5(url.encode('utf-8')).hexdigest() + '_' + filename)
-                        cloudfile.content_type = mime_type
-                        cloudfile.write(thumbnail.getvalue())
-                        thumbnail_url = cloudfile.public_ssl_uri()
-                        selection['thumbnails'] = [{'size': 200, 'url': thumbnail_url}]
-                        self.cf_options['conn_pool'].put(cf_conn)
-                    selected_images.append(selection)
-            except IOError, e:
-                log.error(" %s IOError on image %s %r" % (self.name, url, e))
-            except BadStatusLine, e:
-                log.error(" %s BadStatusLine on image %s %r" % (self.name, url, e))
-            except ValueError, e:
-                log.error(" %s ValueError on image %s %r" % (self.name, url, e))
-
-        # Add selected images to drop                            
-        if selected_images:
-            droplet['media'] = []
-            for image in selected_images:
-                media = {'url': image['url'],
-                         'type': 'image',
-                         'droplet_image': image['url'] == droplet_image}
-                if 'thumbnails' in image:
-                    media['thumbnails'] = image['thumbnails']
-                droplet['media'].append(media)       
+            # Add selected images to drop                            
+            if selected_images:
+                droplet['media'] = []
+                for image in selected_images:
+                    media = {'url': image['url'],
+                             'type': 'image',
+                             'droplet_image': image['url'] == droplet_image}
+                    if 'thumbnails' in image:
+                        media['thumbnails'] = image['thumbnails']
+                    droplet['media'].append(media)
 
         # Send back the updated droplet to the droplet queue for updating
         droplet['media_complete'] = True
