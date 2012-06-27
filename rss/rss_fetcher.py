@@ -14,13 +14,14 @@ droplets for the url in the cache.
 Copyright (c) 2012 Ushahidi. All rights reserved.
 """
 
+import ConfigParser
+import hashlib
+import json
+import logging as log
+import pickle
+import re
 import sys
 import time
-import logging as log
-import json
-import ConfigParser
-import pickle
-import hashlib
 from threading import Event
 from os.path import dirname, realpath
 
@@ -74,14 +75,20 @@ class RssFetcherWorker(Worker):
             # Fetch the feed and use etag/modified headers if they
             # were provided in the last fetch
             d = None
+
+            # Replace instances of "&amp;" with "&" - some RSS endpoints
+            # such as Google News RSS return a 302 when the "&" is not
+            # present
+            fetch_url = re.sub("&amp;", "&", message['url'])
+            
             if message['last_fetch_etag']:
-                d = feedparser.parse(message['url'],
+                d = feedparser.parse(fetch_url,
                                      etag=message['last_fetch_etag'])
             elif message['last_fetch_modified']:
-                d = feedparser.parse(message['url'],
+                d = feedparser.parse(fetch_url,
                                      modified=message['last_fetch_modified'])
             else:
-                d = feedparser.parse(message['url'])
+                d = feedparser.parse(fetch_url)
 
             # Get the avatar, locale and identity name
             avatar = (d.feed.image.get('href', None)
