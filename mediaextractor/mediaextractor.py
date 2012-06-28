@@ -26,7 +26,7 @@ import ssl
 
 from PIL import Image
 from httplib2 import Http
-from httplib import BadStatusLine
+from httplib import BadStatusLine, InvalidURL
 from cloudfiles.connection import ConnectionPool
 import lxml.html
 
@@ -119,7 +119,7 @@ class MediaExtractorQueueWorker(Worker):
                             image.save(thumbnail, format)
                             cf_conn = self.cf_options['conn_pool'].get()
                             container = cf_conn.get_container(self.cf_options['container'])
-                            cloudfile = container.create_object(hashlib.md5(url.encode('utf-8')).hexdigest() + '_' + filename)
+                            cloudfile = container.create_object(hashlib.sha256(url.encode('utf-8')).hexdigest() +  '.' + extension)
                             cloudfile.content_type = mime_type
                             cloudfile.write(thumbnail.getvalue())
                             thumbnail_url = cloudfile.public_ssl_uri()
@@ -132,6 +132,8 @@ class MediaExtractorQueueWorker(Worker):
                     log.error(" %s BadStatusLine on image %s %r" % (self.name, url, e))
                 except ValueError, e:
                     log.error(" %s ValueError on image %s %r" % (self.name, url, e))
+                except InvalidURL, e:
+                    log.error(" %s InvalidURL on image %s %r" % (self.name, url, e))
 
             # Add selected images to drop                            
             if selected_images:
