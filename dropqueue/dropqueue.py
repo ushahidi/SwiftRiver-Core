@@ -92,6 +92,9 @@ class DropQueueWorker(Worker):
             except BadStatusLine, e:
                 log.error("%s BadStatusLine Error communicating with api(%s). Retrying" % (self.name, e))
                 time.sleep(60  + random.randint(0, 120)) # Retry after a random delay
+            except AttributeError, e:
+                log.error("%s AttributeError Error communicating with api(%s). Retrying" % (self.name, e))
+                time.sleep(60  + random.randint(0, 120)) # Retry after a random delay
         
         # Publish new drops for metadata extraction
         new_drops =json.loads(content)
