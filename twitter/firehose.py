@@ -32,8 +32,11 @@ def predicate_match(L):
     # Look for space delimited strings
     search_pattern = L[0].split(" ")
 
+    # Regular expression template for matching predicates
+    regex_template = "\\b%s\\b|((\s|^)%s(\s|$))"
+
     if len(search_pattern) == 1:
-        pattern = "\\b" + L[0] + "\\b"
+        pattern = regex_template % (L[0], L[0])
         return [] if re.search(pattern, L[2], re.IGNORECASE) is None else L[1]
     elif len(search_pattern) > 1:
         # Returns the river ids if each element in the pattern is
@@ -41,7 +44,7 @@ def predicate_match(L):
         occurrence = 0
 
         for p in search_pattern:
-            pattern = "\\b" + p + "\\b"
+            pattern = regex_template % (p, p)
             occurrence += 1 if re.search(pattern, L[2], re.IGNORECASE) else 0
 
         return L[1] if occurrence >= len(search_pattern) else []
@@ -329,11 +332,14 @@ class TwitterFirehose(Daemon):
         of the keywords to track and people to follow via the
         streaming API.
         """
-        track = (predicates.get('track').keys()
-                 if 'track' in predicates else None)
+        # UTF-8 housekeeping before placing the predicates on the firehose
 
-        follow = (predicates.get('follow').keys()
-                  if 'follow' in predicates else None)
+        track = predicates.get('track').keys()\
+                 if 'track' in predicates else None
+
+        follow = predicates.get('follow').keys()\
+                  if 'follow' in predicates else None
+
 
         return track, follow
 
