@@ -436,7 +436,9 @@ if __name__ == '__main__':
 
         # Create the cache file if it doesn't exist
         cache_file = dirname(realpath(__file__)) + "/config/twitter.cache"
-        file(cache_file, 'w')
+        if not exists(cache_file):
+            f = open(cache_file, 'wb')
+            f.close()
 
         # Load the list of twitter user ids
         f = open(cache_file, 'rb')
