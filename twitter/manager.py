@@ -4,11 +4,12 @@
 import ConfigParser
 import json
 import logging as log
+import pickle
 import socket
 import sys
 import time
 import utils
-from os.path import dirname, realpath
+from os.path import dirname, exists, realpath
 from threading import Thread, RLock, Event
 from urllib import urlencode
 
@@ -29,7 +30,8 @@ class TwitterFirehoseManager(Daemon):
     are added/deleted
     """
 
-    def __init__(self, pid_file, out_file, mq_host, db_config, num_workers):
+    def __init__(self, pid_file, out_file, mq_host, db_config, num_workers,
+                 cache_file, twitter_cache):
         Daemon.__init__(self, pid_file, out_file, out_file, out_file)
 
         self.__mq_host = mq_host
@@ -45,9 +47,11 @@ class TwitterFirehoseManager(Daemon):
 
         # Tracks whether the predicates have changed
         self.predicates_changed = False
-        
-        # in-memory cache for the twitter user ids
-        self.twitter_user_ids = {}
+
+        self.cache_file = cache_file
+
+        # In-memory cache for the twitter user ids
+        self.twitter_user_ids = twitter_cache
 
     def get_cursor(self):
         """ Returns a cursor object"""
@@ -91,7 +95,10 @@ class TwitterFirehoseManager(Daemon):
 
         # Proceed
         self._sanitize_filter_predicate(predicate_type, filter_predicate,
-                                         update_target, river_id)
+                                        update_target, river_id)
+
+        # Update twitter cache
+        self._update_twitter_cache()
 
         # set-to-list conversion
         for k, v in update_target.iteritems():
@@ -148,6 +155,8 @@ class TwitterFirehoseManager(Daemon):
         delete_items = {}
         self._sanitize_filter_predicate(predicate_type, filter_predicate,
                                          delete_items, river_id)
+        # Update the internal cache
+        self._update_twitter_cache()
 
         # Get the current set of predicates from memory
         current_predicates = self.predicates.get(predicate_type, dict())
@@ -199,7 +208,7 @@ class TwitterFirehoseManager(Daemon):
             # Strip '@' and '#' off the track predicate
             term = term[1:] if term[:1] == '@' else term
             term = term[1:] if term[:1] == '#' else term
-            
+
             if predicate_type == 'follow':
                 # User lookup via the API
                 term = self._get_twitter_user_id(term)
@@ -243,14 +252,23 @@ class TwitterFirehoseManager(Daemon):
 
                 # Get filter predicate and submit it for sanitization
                 filter_predicate = json.loads(value)['value']
-                self._sanitize_filter_predicate(predicate_type, filter_predicate,
-                                                 update_target, river_id)
+                self._sanitize_filter_predicate(predicate_type,
+                                                filter_predicate,
+                                                update_target, river_id)
 
                 predicates[predicate_type] = update_target
             else:
                 break
 
         c.close()
+
+        # Update the twitter cache only if the DB data is different
+        # from that in the cache
+        if 'follow' in predicates:
+            current = set(predicates['follow'].keys())
+            cache_data = set(self.twitter_user_ids.keys())
+            if (current - cache_data) is not None:
+                self._update_twitter_cache()
 
         # Convert the sets to lists
         for k, v in predicates.iteritems():
@@ -303,7 +321,7 @@ class TwitterFirehoseManager(Daemon):
     def _get_twitter_user_id(self, screen_name):
         """Given a screen name, looks up the ID of the user. Returns, the id
         if found, False otherwise"""
-        
+
         if screen_name in self.twitter_user_ids:
             return self.twitter_user_ids[screen_name]
 
@@ -321,13 +339,24 @@ class TwitterFirehoseManager(Daemon):
                     if 'id_str' in payload:
                         self.twitter_user_ids[screen_name] = payload['id_str']
                         return payload['id_str']
+                    else:
+                        log.error("Response from Twitter API: %r" % payload)
                 except ValueError, error:
-                    log.error("Invalid response from the Twitter API: %s" % error)
+                    log.error("Invalid response (%s) from the Twitter API for user %s" %
+                              (error, screen_name))
         except socket.error, msg:
             log.error("Error communicating with the Twitter API %s" % msg)
 
         # If we get here, the lookup failed
         return False
+
+    def _update_twitter_cache(self):
+        """Updates the twitter cache on disk"""
+
+        if len(self.twitter_user_ids) > 0:
+            output = open(self.cache_file, 'wb')
+            pickle.dump(self.twitter_user_ids, output)
+            output.close()
 
 
 class FirehosePublisher(Publisher):
@@ -405,9 +434,19 @@ if __name__ == '__main__':
         mq_host = config.get('main', 'mq_host')
         num_workers = config.getint('main', 'num_workers')
 
+        # Create the cache file if it doesn't exist
+        cache_file = dirname(realpath(__file__)) + "/config/twitter.cache"
+        file(cache_file, 'w')
+
+        # Load the list of twitter user ids
+        f = open(cache_file, 'rb')
+        twitter_cache = pickle.load(f) if len(f.readlines()) > 0 else {}
+        f.close()
+
         # Initialize the daemon
         daemon = TwitterFirehoseManager(pidfile, stdout, mq_host,
-                                        db_config, num_workers)
+                                        db_config, num_workers,
+                                        cache_file, twitter_cache)
 
         if len(sys.argv) == 2:
             if sys.argv[1] == 'start':
