@@ -9,6 +9,7 @@ import socket
 import sys
 import time
 import utils
+from os import stat
 from os.path import dirname, exists, realpath
 from threading import Thread, RLock, Event
 from urllib import urlencode
@@ -442,7 +443,7 @@ if __name__ == '__main__':
 
         # Load the list of twitter user ids
         f = open(cache_file, 'rb')
-        twitter_cache = pickle.load(f) if len(f.readlines()) > 0 else {}
+        twitter_cache = {} if stat(cache_file)[6] == 0 else pickle.load(f)
         f.close()
 
         # Initialize the daemon
