@@ -20,7 +20,6 @@ from threading import Thread
 from os.path import dirname, realpath
 
 from httplib2 import Http
-from readability.readability import Document
 
 from swiftriver import Worker, Consumer, Daemon, DropPublisher
 
@@ -41,12 +40,34 @@ class SemanticsQueueWorker(Worker):
         log.info(" %s droplet received with id %d" %
                  (self.name, droplet.get('id', 0)))
 
-        # Clean out unnecessary HTML and UTF-8 encode the payload before
-        # submitting it to the tagging API
-        droplet_raw = droplet['droplet_raw'].strip()
-        droplet_raw = Document(droplet_raw).summary().encode('utf-8', 'ignore')
+        droplet_raw = droplet['droplet_raw']
 
-        if droplet_raw: # Not empty after stripping tags
+        if droplet_raw is not None:
+            # nltk.clean_html() implementation
+            # Credits: NLTK Team - <http://www.nltk.org>
+
+            # Remove inline Javascript and CSS
+            droplet_raw = re.sub(
+                r"(?is)<(script|style).*?>.*?(</\1)",
+                "",
+                droplet_raw.strip())
+
+            # Remove HTML comments. Do this before removing HTML tags because
+            # comments can contain '>' characters
+            droplet_raw = re.sub(r"(?s)<!--(.*?)-->[\n]?", "", droplet_raw)
+
+            # Remove the remaining HTML tags
+            droplet_raw = re.sub(r"(?s)<.*?>", " ", droplet_raw)
+
+            # Whitespace removal
+            droplet_raw = re.sub(r"&nbsp;", " ", droplet_raw)
+            droplet_raw = re.sub(r"   ", " ", droplet_raw)
+            droplet_raw = re.sub(r"   ", " ", droplet_raw)
+
+            # Finally, UTF-8 encode the payload before submitting it to the
+            # tagging API
+            droplet_raw = droplet_raw.strip().encode('utf-8', 'ignore')
+
             post_data = dict(text=droplet_raw)
             headers = {'Content-type': 'application/x-www-form-urlencoded'}
 
@@ -103,10 +124,10 @@ class SemanticsQueueWorker(Worker):
 
         # Send back the updated droplet to the droplet queue for updating
         droplet['semantics_complete'] = True
-        
+
         # Some internal data for our callback
         droplet['_internal'] = {'delivery_tag': delivery_tag}
-        
+
         self.drop_publisher.publish(droplet, self.confirm_drop)
 
         log.info(" %s finished processing" % (self.name,))
