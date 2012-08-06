@@ -245,7 +245,7 @@ class TwitterFirehose(Daemon):
     def run_firehose(self, message_queue, confirm_queue):
         # Get the items to place on the firehose
         while True:
-            routing_key, delivery_tag, body = message_queue.get(True)
+            method, properties, body = message_queue.get(True)
             predicates = json.loads(body)
 
             t = [None, None]
@@ -298,7 +298,7 @@ class TwitterFirehose(Daemon):
                         self.follow_stream_running = True
 
             #Acknowledge delivery
-            confirm_queue.put(delivery_tag, False)
+            confirm_queue.put(method.delivery_tag, False)
 
     def _init_firehose(self, predicate_type, predicates, reconnect=False):
         """Initializes a stream listener and its associated firehose

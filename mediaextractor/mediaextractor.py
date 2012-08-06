@@ -31,7 +31,7 @@ from httplib import BadStatusLine, InvalidURL
 from cloudfiles.connection import ConnectionPool
 import lxml.html
 
-from swiftriver import Daemon, Consumer, Worker, DropPublisher
+from swiftriver import Daemon, Consumer, Worker, Publisher
 
 
 class MediaExtractorQueueWorker(Worker):
@@ -47,16 +47,16 @@ class MediaExtractorQueueWorker(Worker):
         """Populate links and images in the drop and publish back to the
         droplet queue."""
 
-        routing_key, delivery_tag, body = self.job_queue.get(True)
-        start_time = time.time()
-        droplet = json.loads(body)            
-        log.info(" %s droplet received with id %d" %
-                 (self.name, droplet.get('id', 0)))
+        method, properties, body = self.job_queue.get(True)
+        delivery_tag = method.delivery_tag
+        droplet = json.loads(body)         
+        log.info(" %s drop received with correlation_id %s" %
+                 (self.name, properties.correlation_id))
 
         links = []
         images = []
         
-        if droplet['droplet_raw']:
+        if droplet['droplet_content']:
             # Get the urls from the anchor and image tags in the drop 
             media_tags = re.findall(
                 '<\s*(a|img)\s*[^>]*(?:(?:href|src)\s*=\s*"([^"]+))"[^>]*>',
@@ -150,13 +150,17 @@ class MediaExtractorQueueWorker(Worker):
 
         # Send back the updated droplet to the droplet queue for updating
         droplet['media_complete'] = True
+        droplet['source'] = 'mediaextractor'
         
         # Some internal data for our callback
         droplet['_internal'] = {'delivery_tag': delivery_tag}
         
-        self.drop_publisher.publish(droplet, self.confirm_drop)
+        self.drop_publisher.publish(droplet, 
+                                    callback=self.confirm_drop, 
+                                    corr_id=properties.correlation_id,
+                                    routing_key=properties.reply_to)
 
-        log.info(" %s finished processing in %fs" % (self.name, time.time()-start_time))
+        log.info(" %s finished processing" % (self.name,))
         
     def confirm_drop(self, drop):
         # Confirm delivery only once droplet has been passed
@@ -281,7 +285,7 @@ class MediaExtractorQueueDaemon(Daemon):
                    'prefetch_count': self.num_workers}
         drop_consumer = Consumer("mediaextractor-consumer", self.mq_host, 
                                  'MEDIA_EXTRACTOR_QUEUE', options)        
-        drop_publisher = DropPublisher(mq_host)
+        drop_publisher = Publisher("Response Publisher", mq_host, None)
 
         for x in range(self.num_workers):
             MediaExtractorQueueWorker("mediaextractor-worker-" + str(x), 

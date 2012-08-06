@@ -316,7 +316,8 @@ class FetcherResponseHandler(Worker):
     def work(self):
         """Update rss_url status from fetcher response"""
         try:
-            routing_key, delivery_tag, body = self.job_queue.get(True)
+            method, properties, body = self.job_queue.get(True)
+            delivery_tag = method.delivery_tag
             message = json.loads(body)
             log.debug(" %s response received %r" % (self.name, message))
             self.scheduler.update_rss_url(message)
@@ -339,7 +340,9 @@ class ChannelUpdateHandler(Worker):
     def work(self):
         """Fetch a newly added channel option"""
         try:
-            routing_key, delivery_tag, body = self.job_queue.get(True)
+            method, properties, body = self.job_queue.get(True)
+            routing_key = method.routing_key
+            delivery_tag = method.delivery_tag
             message = json.loads(body)
             log.debug(" %s channel option received %r" % (self.name, message))
             # Submit the channel option to the fetchers
