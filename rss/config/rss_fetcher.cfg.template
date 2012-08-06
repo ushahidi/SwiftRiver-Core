@@ -1,7 +1,7 @@
 [main]
-log_file=/Users/bmuita/workspace/swiftcore/rss/logs/rss-fetcher.log
-out_file=/Users/bmuita/workspace/swiftcore/rss/logs/rss-fetcher.out
-pid_file=/tmp/rss-fetcher.pid
+log_file=/path/to/logs/rss-fetcher.log
+out_file=/path/to/logs/rss-fetcher.out
+pid_file=/path/to/rss-fetcher.pid
 num_workers=10
 log_level=DEBUG
 mq_host=localhost
