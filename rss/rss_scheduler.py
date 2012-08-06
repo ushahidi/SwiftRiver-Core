@@ -76,6 +76,7 @@ class RssFetchScheduler(Daemon):
         where cf.id = cfo.channel_filter_id
         and cf.channel = 'rss'
         and cfo.key = 'url'
+        and filter_enabled = 1
         """)
 
         urls = {}
