@@ -5,6 +5,7 @@ pid_file=/tmp/firehose_manager.pid
 num_workers=10
 log_level=DEBUG
 mq_host=localhost
+cache_file=/tmp/twitter.cache
 
 [db]
 host=localhost

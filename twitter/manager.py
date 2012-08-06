@@ -436,7 +436,7 @@ if __name__ == '__main__':
         num_workers = config.getint('main', 'num_workers')
 
         # Create the cache file if it doesn't exist
-        cache_file = dirname(realpath(__file__)) + "/config/twitter.cache"
+        cache_file = config.get('main', 'cache_file')
         if not exists(cache_file):
             f = open(cache_file, 'wb')
             f.close()
