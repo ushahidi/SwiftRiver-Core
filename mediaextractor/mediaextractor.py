@@ -23,6 +23,7 @@ import hashlib
 import urllib2
 import socket
 import ssl
+import time
 
 from PIL import Image
 from httplib2 import Http
@@ -47,6 +48,7 @@ class MediaExtractorQueueWorker(Worker):
         droplet queue."""
 
         routing_key, delivery_tag, body = self.job_queue.get(True)
+        start_time = time.time()
         droplet = json.loads(body)            
         log.info(" %s droplet received with id %d" %
                  (self.name, droplet.get('id', 0)))
@@ -154,7 +156,7 @@ class MediaExtractorQueueWorker(Worker):
         
         self.drop_publisher.publish(droplet, self.confirm_drop)
 
-        log.info(" %s finished processing" % (self.name,))
+        log.info(" %s finished processing in %fs" % (self.name, time.time()-start_time))
         
     def confirm_drop(self, drop):
         # Confirm delivery only once droplet has been passed

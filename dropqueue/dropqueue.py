@@ -16,6 +16,7 @@ import socket
 import json
 import ConfigParser
 import random
+
 from httplib2 import Http
 from httplib import BadStatusLine
 from os.path import realpath, dirname
@@ -73,6 +74,7 @@ class DropQueueWorker(Worker):
             return
 
         log.info(" %s posting %d drops to api" % (self.name, len(drops)))
+        start_time = time.time()
         resp = content = None
         while not resp:
             try:
@@ -108,7 +110,7 @@ class DropQueueWorker(Worker):
 
         # Reschedule processing of the deque
         self.schedule_posting()
-        log.info("%s finished processing" % (self.name))
+        log.info("%s finished processing in %fs" % (self.name, time.time()-start_time))
 
 
 class MetaDataPublisher(Publisher):

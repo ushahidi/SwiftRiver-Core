@@ -44,6 +44,7 @@ class RssFetcherWorker(Worker):
     def work(self):
         """Process a URL"""
         routing_key, delivery_tag, body = self.job_queue.get(True)
+        start_time = time.time()
         message = json.loads(body)
         log.info(" %s fetching %s" % (self.name, message['url']))
 
@@ -160,7 +161,9 @@ class RssFetcherWorker(Worker):
                 'last_fetch_time': int(time.mktime(time.gmtime()))})
 
         self.confirm_queue.put(delivery_tag, False)
-        log.info(" %s done fetching %s" % (self.name, message['url']))
+        log.info(" %s done fetching %s in %fs" % (self.name, 
+                                                  message['url'],
+                                                  time.time()-start_time))
 
         # Add new drops to our local cache
         if len(drops):

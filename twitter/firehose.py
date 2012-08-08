@@ -72,7 +72,7 @@ class FilterPredicateMatcher(Worker):
         Worker.__init__(self, "Predicate Matcher", drop_queue, None)
 
     def work(self):
-        drop = self.job_queue.get(True)
+        start_time, drop = self.job_queue.get(True)
         river_ids = []
         if self.follow_match:
             identity_orig_id = drop['identity_orig_id']
@@ -98,8 +98,8 @@ class FilterPredicateMatcher(Worker):
         river_ids = list(set(river_ids))
         if len(river_ids) > 0:
             # Log
-            log.debug("Droplet content: %s, Rivers: %s" %
-                      (drop['droplet_content'], river_ids))
+            log.debug("Droplet content: %s, Rivers: %s Processing Time: %f" %
+                      (drop['droplet_content'], river_ids, time.time()-start_time))
 
             drop['river_id'] = river_ids
             self.drop_publisher.publish(drop)
@@ -454,7 +454,7 @@ class FirehoseStreamListener(StreamListener):
                         'droplet_raw': droplet_content,
                         'droplet_locale': payload['user']['lang'],
                         'droplet_date_pub': droplet_date_pub}
-                    self.drop_queue.put(drop, False)
+                    self.drop_queue.put((time.time(), drop), False)
 
             elif 'delete' in payload:
                 status = payload['delete']['status']
