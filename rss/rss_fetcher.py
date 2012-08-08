@@ -45,6 +45,7 @@ class RssFetcherWorker(Worker):
         """Process a URL"""
         routing_key, delivery_tag, body = self.job_queue.get(True)
         start_time = time.time()
+        drop_count = 0
         message = json.loads(body)
         log.info(" %s fetching %s" % (self.name, message['url']))
 
@@ -65,6 +66,7 @@ class RssFetcherWorker(Worker):
                     (self.name, message['url']))
 
             for db_drop, in results:
+                drop_count += 1
                 drop = pickle.loads(db_drop)
                 drop['river_id'] = message['river_ids']
                 self.drop_publisher.publish(drop)
@@ -99,6 +101,7 @@ class RssFetcherWorker(Worker):
             identity_name = d.feed.get('title', message['url'])
 
             for entry in d.entries:
+                drop_count += 1
                 if (not message['last_fetch_etag'] and
                     not message['last_fetch_modified']):
                     if (time.mktime(entry.get('date_parsed', time.gmtime()))
@@ -161,7 +164,8 @@ class RssFetcherWorker(Worker):
                 'last_fetch_time': int(time.mktime(time.gmtime()))})
 
         self.confirm_queue.put(delivery_tag, False)
-        log.info(" %s done fetching %s in %fs" % (self.name, 
+        log.info(" %s done fetching %d drops from %s in %fs" % (self.name, 
+                                                  drop_count,
                                                   message['url'],
                                                   time.time()-start_time))
 
