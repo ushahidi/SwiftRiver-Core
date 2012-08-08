@@ -110,7 +110,7 @@ class DropQueueWorker(Worker):
 
         # Reschedule processing of the deque
         self.schedule_posting()
-        log.info("%s finished processing in %fs" % (self.name, time.time()-start_time))
+        log.info("%s finished processing %d drops in %fs" % (self.name,  len(drops), time.time()-start_time))
 
 
 class MetaDataPublisher(Publisher):
