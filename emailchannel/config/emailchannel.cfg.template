@@ -1,0 +1,14 @@
+[main]
+log_file=/path/to/emailchannel.log
+out_file=/path/to/emailchannel.out
+pid_file=/path/to/emailchannel.pid
+log_level=DEBUG
+listen_port = 10025
+mq_host=localhost
+
+[db]
+host=localhost
+port=3306
+user=root
+pass=
+database=swiftweb
