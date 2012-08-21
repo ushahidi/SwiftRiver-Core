@@ -23,35 +23,45 @@ from smtpd import SMTPChannel, SMTPServer
 import MySQLdb
 
 from swiftriver import Daemon, DropPublisher
+from cloudfiles.connection import ConnectionPool
 
 
 class EmailDaemon(Daemon):
 
-    def __init__(self, port, mq_host, db_config, pid_file, out_file):
+    def __init__(self,
+                 port,
+                 mq_host,
+                 db_config,
+                 pid_file,
+                 out_file,
+                 cf_options):
         Daemon.__init__(self, pid_file, out_file, out_file, out_file)
 
         self.port = port
         self.mq_host = mq_host
         self.db_config = db_config
         self.db = None
+        self.cf_options = cf_options
 
     def run(self):
         log.info("Email Daemon Started")
         drop_publisher = DropPublisher(mq_host)
         server = LMTPServer(('localhost', self.port),
                             self.db_config,
-                            drop_publisher)
+                            drop_publisher,
+                            self.cf_options)
         asyncore.loop()
 
 
 class LMTPServer(SMTPServer):
 
-    def __init__(self, localaddr, db_config, drop_publisher):
+    def __init__(self, localaddr, db_config, drop_publisher, cf_options):
         SMTPServer.__init__(self, localaddr, None)
 
         self.drop_publisher = drop_publisher
         self.db_config = db_config
         self.db = None
+        self.cf_options = cf_options
 
     def process_message(self, peer, mailfrom, rcptto, data):
         try:
@@ -76,6 +86,8 @@ class LMTPServer(SMTPServer):
         if not content:
             log.debug("No content found")
             return
+
+        attachments = self.__get_attachments(msg)
 
         rivers = self.__get_rivers(rcptto)
         if not rivers:
@@ -105,6 +117,14 @@ class LMTPServer(SMTPServer):
             'droplet_raw': content,
             'droplet_locale': None,
             'droplet_date_pub': droplet_date_pub}
+
+        if attachments:
+            drop['media'] = []
+            for a in attachments:
+                drop['media'].append({'url': a['url'],
+                                      'type': a['type'],
+                                      'droplet_image': False})
+
         self.drop_publisher.publish(drop)
         log.debug("Drop published to the following rivers: %r" % rivers)
 
@@ -119,10 +139,32 @@ class LMTPServer(SMTPServer):
             return msg.get_payload(decode=True) \
                         .decode(charset) \
                         .encode('utf-8') \
-                        .replace('\n', '<br>\n') # Convert newlines to 
+                        .replace('\n', '<br>\n') # Convert newlines to
                                                  # html line breaks
         else:
             return self.__get_content(msg.get_payload()[0])
+
+    def __get_attachments(self, msg):
+        """Push attachments to cloudfiles."""
+        if not msg.is_multipart():
+            return None
+
+        urls = []
+        cf_conn = self.cf_options['conn_pool'].get()
+        container = cf_conn.get_container(self.cf_options['container'])
+        for m in msg.get_payload()[1:]:
+            payload = m.get_payload(decode=True)
+            if m.get_content_maintype() == 'text':
+                charset = msg.get_content_charset('utf-8')
+                payload = payload.decode(charset).encode('utf-8')
+            filename = hashlib.sha256(payload).hexdigest()
+            cloudfile = container.create_object(filename)
+            cloudfile.content_type = m.get_content_type()
+            cloudfile.write(payload)
+            urls.append({'url': cloudfile.public_ssl_uri(),
+                      'type': m.get_content_maintype()})
+        self.cf_options['conn_pool'].put(cf_conn)
+        return urls
 
     def __get_rivers(self, rcptto):
         c = self.get_cursor()
@@ -183,6 +225,12 @@ if __name__ == "__main__":
             'user': config.get("db", 'user'),
             'pass': config.get("db", 'pass'),
             'database': config.get("db", 'database')}
+        cf_options = {
+            'username': config.get("cloudfiles", 'username'),
+            'api_key': config.get("cloudfiles", 'api_key'),
+            'container': config.get("cloudfiles", 'container')}
+        cf_options['conn_pool'] = ConnectionPool(cf_options['username'],
+                                                 cf_options['api_key'])
 
         FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
         log.basicConfig(filename=log_file,
@@ -195,7 +243,8 @@ if __name__ == "__main__":
                              mq_host,
                              db_config,
                              pid_file,
-                             out_file)
+                             out_file,
+                             cf_options)
         if len(sys.argv) == 2:
             if 'start' == sys.argv[1]:
                 daemon.start()

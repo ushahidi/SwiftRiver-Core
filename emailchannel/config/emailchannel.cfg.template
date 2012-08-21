@@ -12,3 +12,8 @@ port=3306
 user=root
 pass=
 database=swiftweb
+
+[cloudfiles]
+username=xxxxx
+api_key=xxxxx
+container=test_drop_image_thumbs
