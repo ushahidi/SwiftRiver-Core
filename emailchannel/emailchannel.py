@@ -38,7 +38,9 @@ class EmailDaemon(Daemon):
     def run(self):
         log.info("Email Daemon Started")
         drop_publisher = DropPublisher(mq_host)
-        server = LMTPServer(('localhost', self.port), self.db_config, drop_publisher)
+        server = LMTPServer(('localhost', self.port),
+                            self.db_config,
+                            drop_publisher)
         asyncore.loop()
 
 
@@ -104,7 +106,7 @@ class LMTPServer(SMTPServer):
             'droplet_locale': None,
             'droplet_date_pub': droplet_date_pub}
         self.drop_publisher.publish(drop)
-        log.debug("Drop published to the following rivers: " % rivers)
+        log.debug("Drop published to the following rivers: %r" % rivers)
 
     def __get_content(self, msg):
         """Content is the first message part.
@@ -113,7 +115,12 @@ class LMTPServer(SMTPServer):
 
         """
         if not msg.is_multipart():
-            return msg.get_payload().decode()
+            charset = msg.get_content_charset('utf-8')
+            return msg.get_payload(decode=True) \
+                        .decode(charset) \
+                        .encode('utf-8') \
+                        .replace('\n', '<br>\n') # Convert newlines to 
+                                                 # html line breaks
         else:
             return self.__get_content(msg.get_payload()[0])
 
