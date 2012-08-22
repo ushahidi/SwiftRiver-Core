@@ -155,7 +155,7 @@ class LMTPServer(SMTPServer):
         for m in msg.get_payload()[1:]:
             payload = m.get_payload(decode=True)
             if m.get_content_maintype() == 'text':
-                charset = msg.get_content_charset('utf-8')
+                charset = m.get_content_charset('utf-8')
                 payload = payload.decode(charset).encode('utf-8')
             filename = hashlib.sha256(payload).hexdigest()
             cloudfile = container.create_object(filename)
