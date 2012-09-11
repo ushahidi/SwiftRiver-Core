@@ -38,6 +38,7 @@ class SemanticsQueueWorker(Worker):
         """POSTs the droplet to the semantics API"""
         method, properties, body = self.job_queue.get(True)
         delivery_tag = method.delivery_tag
+        start_time = time.time()
         droplet = json.loads(body)
         log.info(" %s droplet received with correlation_id %s" %
                  (self.name, properties.correlation_id))
@@ -137,7 +138,7 @@ class SemanticsQueueWorker(Worker):
                                     corr_id=properties.correlation_id,
                                     routing_key=properties.reply_to)
 
-        log.info("%s finished processing" % self.name)
+        log.info("%s finished processing in %fs" % (self.name, time.time()-start_time))
 
     def confirm_drop(self, drop):
         # Confirm delivery only once droplet has been passed

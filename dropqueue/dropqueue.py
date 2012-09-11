@@ -78,14 +78,14 @@ class CallbackWorker(Worker):
                 for k in drop.keys():
                     self.drop_store['drops'][corr_id][k] = drop[k]
 
-                if 'media_complete' in self.drop_store['drops'][corr_id] and \
-                   'semantics_complete' in self.drop_store['drops'][corr_id]:
-                   log.debug(" %s drop with correlation_id %s has completed metadata extraction" %
-                            (self.name, properties.correlation_id))
-
-                    # Metadata extraction complete, post to the API
-                    self.publish_queue.append((method.delivery_tag, drop))
-                    del self.drop_store['drops'][corr_id]
+                    if 'media_complete' in self.drop_store['drops'][corr_id] and \
+                       'semantics_complete' in self.drop_store['drops'][corr_id]:
+                       log.debug(" %s drop with correlation_id %s has completed metadata extraction" %
+                                (self.name, properties.correlation_id))
+                    
+                       # Metadata extraction complete, post to the API
+                       self.publish_queue.append((method.delivery_tag, drop))
+                       del self.drop_store['drops'][corr_id]
                         
         
    def confirm_drop(self, drop):
@@ -120,6 +120,7 @@ class CallbackWorker(Worker):
                break
    
        log.info(" %s posting %d drops to api" % (self.name, len(drops)))
+       start_time = time.time()
        resp = None
        while not resp:
            try:
@@ -149,7 +150,7 @@ class CallbackWorker(Worker):
    
        # Reschedule processing of the deque
        self.schedule_posting()
-       log.info("%s finished processing" % (self.name))
+       log.info("%s finished processing %d drops in %fs" % (self.name,  len(drops), time.time()-start_time))
 
 class MetaDataPublisher(Publisher):
     
