@@ -22,25 +22,26 @@ from os.path import dirname, realpath
 
 from httplib2 import Http
 
-from swiftriver import Worker, Consumer, Daemon, DropPublisher
+from swiftriver import Worker, Consumer, Daemon, Publisher
 
 
 class SemanticsQueueWorker(Worker):
 
-    def __init__(self, name, job_queue, confirm_queue, drop_publisher,
-                 api_url):
-        self.drop_publisher = drop_publisher
+    def __init__(self, name, job_queue, confirm_queue, api_url,
+                 drop_publisher):
         self.api_url = api_url
         self.h = Http()
+        self.drop_publisher = drop_publisher
         Worker.__init__(self, name, job_queue, confirm_queue)
 
     def work(self):
         """POSTs the droplet to the semantics API"""
-        routing_key, delivery_tag, body = self.job_queue.get(True)
+        method, properties, body = self.job_queue.get(True)
+        delivery_tag = method.delivery_tag
         start_time = time.time()
         droplet = json.loads(body)
-        log.info(" %s droplet received with id %d" %
-                 (self.name, droplet.get('id', 0)))
+        log.info(" %s droplet received with correlation_id %s" %
+                 (self.name, properties.correlation_id))
 
         droplet_raw = droplet['droplet_raw']
 
@@ -126,13 +127,18 @@ class SemanticsQueueWorker(Worker):
 
         # Send back the updated droplet to the droplet queue for updating
         droplet['semantics_complete'] = True
+        droplet['source'] = 'semantics'
 
         # Some internal data for our callback
         droplet['_internal'] = {'delivery_tag': delivery_tag}
 
-        self.drop_publisher.publish(droplet, self.confirm_drop)
+        # Publish the drop to it's reply_to queue
+        self.drop_publisher.publish(droplet, 
+                                    callback=self.confirm_drop, 
+                                    corr_id=properties.correlation_id,
+                                    routing_key=properties.reply_to)
 
-        log.info(" %s finished processing in %fs" % (self.name, time.time()-start_time))
+        log.info("%s finished processing in %fs" % (self.name, time.time()-start_time))
 
     def confirm_drop(self, drop):
         # Confirm delivery only once droplet has been passed
@@ -159,12 +165,14 @@ class SemanticsQueueDaemon(Daemon):
 
         drop_consumer = Consumer("semanticsqueue-consumer", self.mq_host,
                                  'SEMANTICS_QUEUE', options)
-        drop_publisher = DropPublisher(mq_host)
+
+        drop_publisher = Publisher("Response Publisher", mq_host, None)
+
         for x in range(self.num_workers):
             SemanticsQueueWorker("semanticsqueue-worker-" + str(x),
                                  drop_consumer.message_queue,
-                                 drop_consumer.confirm_queue, drop_publisher,
-                                 self.api_url)
+                                 drop_consumer.confirm_queue,
+                                 self.api_url, drop_publisher)
 
         log.info("Workers started")
         drop_consumer.join()

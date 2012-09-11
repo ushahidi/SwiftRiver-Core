@@ -37,6 +37,7 @@ class Consumer(Thread):
         self.durable_queue = options.get('durable_queue', False)
         self.durable_exchange = options.get('durable_exchange', True)
         self.prefetch_count = options.get('prefetch_count', 1)
+        self.exclusive = options.get('exclusive', False)
 
         self.start()
 
@@ -53,7 +54,9 @@ class Consumer(Thread):
 
                 channel = connection.channel()
                 channel.queue_declare(queue=self.queue_name,
-                                      durable=self.durable_queue)
+                                      durable=self.durable_queue,
+                                      exclusive=self.exclusive)
+                                      
                 channel.basic_qos(prefetch_count=self.prefetch_count)
 
                 if self.exchange_name:
@@ -79,7 +82,7 @@ class Consumer(Thread):
 
     def handle_message(self, ch, method, properties, body):
         self.pending += 1
-        self.message_queue.put((method.routing_key, method.delivery_tag, body),
+        self.message_queue.put((method, properties, body),
                                False)
 
         # Pika channels are neither thread safe nor can messages received on

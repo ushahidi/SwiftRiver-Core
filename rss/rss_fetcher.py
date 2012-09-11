@@ -43,7 +43,8 @@ class RssFetcherWorker(Worker):
 
     def work(self):
         """Process a URL"""
-        routing_key, delivery_tag, body = self.job_queue.get(True)
+        method, properties, body = self.job_queue.get(True)
+        delivery_tag = method.delivery_tag
         start_time = time.time()
         drop_count = 0
         message = json.loads(body)

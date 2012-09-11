@@ -379,20 +379,20 @@ class TwitterPredicateUpdateWorker(Worker):
 
     def work(self):
         try:
-            routing_key, delivery_tag, body = self.job_queue.get(True)
+            method, properties, body = self.job_queue.get(True)
             message = json.loads(body)
             # Add predicates
-            if routing_key == "web.channel_option.twitter.add":
+            if method.routing_key == "web.channel_option.twitter.add":
                 log.info("Add new twitter predicate...")
                 self.manager.add_filter_predicate(message)
 
             # Delete predicates
-            if routing_key == "web.channel_option.twitter.delete":
+            if method.routing_key == "web.channel_option.twitter.delete":
                 log.info("Deleting twitter predicate...")
 
                 self.manager.delete_filter_predicate(message)
 
-            self.confirm_queue.put(delivery_tag, False)
+            self.confirm_queue.put(method.delivery_tag, False)
         except Exception, e:
             log.info(e)
             log.exception(e)
@@ -436,7 +436,7 @@ if __name__ == '__main__':
         num_workers = config.getint('main', 'num_workers')
 
         # Create the cache file if it doesn't exist
-        cache_file = dirname(realpath(__file__)) + "/config/twitter.cache"
+        cache_file = config.get('main', 'cache_file')
         if not exists(cache_file):
             f = open(cache_file, 'wb')
             f.close()

@@ -1,7 +1,7 @@
 [main]
-log_file=/Users/bmuita/workspace/swiftcore/semanticsqueue/logs/semanticsqueue.log
-out_file=/Users/bmuita/workspace/swiftcore/semanticsqueue/logs/semanticsqueue.out
-pid_file=/tmp/semanticsqueue.pid
+log_file=/path/to/logs/semanticsqueue.log
+out_file=/path/to/logs/semanticsqueue.out
+pid_file=/path/to/semanticsqueue.pid
 num_workers=10
 log_level=DEBUG
 api_url=http://semantics.api.ushahididev.com/entities.json
