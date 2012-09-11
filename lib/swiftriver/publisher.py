@@ -29,8 +29,8 @@ class Publisher(Thread):
         self.q = Queue()
         self.start()
 
-    def publish(self, item, callback = None):
-        self.q.put((item, callback), False)
+    def publish(self, item, callback=None, reply_to=None, corr_id=None, routing_key=None):
+        self.q.put((item, callback, reply_to, corr_id, routing_key), False)
 
     def run(self):
         # Connect to the MQ, retry on failure
@@ -51,16 +51,21 @@ class Publisher(Thread):
                     channel.exchange_declare(exchange=self.exchange_name,
                                              type=self.exchange_type,
                                              durable=self.durable)
-                
-                props = None
-                if self.durable:
-                    props = pika.BasicProperties(delivery_mode=2)
-                
+
                 while True:
-                    item, callback = self.q.get(True)
+                    item, callback, reply_to, corr_id, routing_key = self.q.get(True)
+                    
+                    props = pika.BasicProperties()
+                    if self.durable:
+                        props.delivery_mode = 2
+                    if corr_id is not None:
+                        props.correlation_id = corr_id
+                    if reply_to is not None:
+                        props.reply_to = reply_to
+                    
                     try:
                         channel.basic_publish(exchange=self.exchange_name,
-                                              routing_key=self.routing_key,
+                                              routing_key=routing_key if routing_key is not None else self.routing_key,
                                               properties=props,
                                               body=json.dumps(item))
                     except UnicodeDecodeError, e:

@@ -1,5 +1,5 @@
 [main]
-log_file=/Users/ekala/dev/SwiftRiver-Core/maintenance/logs/riverexpiry.log
+log_file=/path/to/logs/riverexpiry.log
 log_level=DEBUG
 mq_host=localhost
 
