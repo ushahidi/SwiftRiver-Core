@@ -171,7 +171,7 @@ class LMTPServer(SMTPServer):
         format_strings = ','.join(['%s'] * len(rcptto))
         c.execute("""select `id`
                   from `rivers`
-                  where public_token in (%s)""" % format_strings,
+                  where email_id in (%s)""" % format_strings,
                   tuple([email.split('@')[0] for email in rcptto]))
         return [river_id for river_id, in c.fetchall()]
 
