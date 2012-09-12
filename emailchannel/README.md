@@ -14,6 +14,7 @@ The following extra Python libraries are required by the application:
  
   * MySQLdb (http://mysql-python.sourceforge.net/MySQLdb.html)
   * cloudfiles (https://github.com/rackspace/python-cloudfiles)
+  * dateutil (http://labix.org/python-dateutil)
 
 Installation of Required Libraries
 ===================================
