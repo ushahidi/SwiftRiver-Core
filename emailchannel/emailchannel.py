@@ -190,6 +190,7 @@ class LMTPServer(SMTPServer):
                                               passwd=self.db_config['pass'],
                                               user=self.db_config['user'],
                                               db=self.db_config['database'])
+                    self.db.autocommit(True)
 
                 self.db.ping(True)
                 cursor = self.db.cursor()
