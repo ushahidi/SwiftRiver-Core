@@ -47,7 +47,9 @@ class DropQueueWorker(Worker):
             drop['source'] = None # Will be populated by metadata workers.
 
             with self.drop_store['lock']:
-                self.drop_store['drops'][corr_id] = drop
+                self.drop_store['drops'][corr_id] = {}
+                self.drop_store['drops'][corr_id]['drop'] = drop
+                self.drop_store['drops'][corr_id]['delivery_tag'] = delivery_tag
             self.meta_publisher.publish(drop, reply_to=self.cb_queue, corr_id=corr_id)
             log.info(" %s Published drop with correlation_id %s for metadata extraction" %
                      (self.name, corr_id))
@@ -55,8 +57,9 @@ class DropQueueWorker(Worker):
         
 class CallbackWorker(Worker):
 
-   def __init__(self, name, job_queue, confirm_queue, drop_store, cb_queue, 
+   def __init__(self, name, job_queue, confirm_queue, drop_confirm_queue, drop_store, cb_queue, 
                 drop_filter_publisher, api_url):
+        self.drop_confirm_queue = drop_confirm_queue
         self.drop_store = drop_store
         self.cb_queue = cb_queue
         self.drop_filter_publisher = drop_filter_publisher
@@ -76,23 +79,26 @@ class CallbackWorker(Worker):
         with self.drop_store['lock']:
             if corr_id in self.drop_store['drops']:
                 for k in drop.keys():
-                    self.drop_store['drops'][corr_id][k] = drop[k]
+                    self.drop_store['drops'][corr_id]['drop'][k] = drop[k]
 
-                if 'media_complete' in self.drop_store['drops'][corr_id] and \
-                   'semantics_complete' in self.drop_store['drops'][corr_id]:
+                if 'media_complete' in self.drop_store['drops'][corr_id]['drop'] and \
+                   'semantics_complete' in self.drop_store['drops'][corr_id]['drop']:
                    log.debug(" %s drop with correlation_id %s has completed metadata extraction" %
                             (self.name, properties.correlation_id))
                 
-                   # Metadata extraction complete, post to the API
-                   self.publish_queue.append((method.delivery_tag, drop))
+                   # Metadata extraction complete, post to the API                   
+                   # We do not send media_complete and semantics complete to the api
+                   if 'media_complete' in drop:
+                       del drop['media_complete']
+                   if 'semantics_complete' in drop:
+                       del drop['semantics_complete']
+                
+                   delivery_tag = self.drop_store['drops'][corr_id]['delivery_tag']
+                   self.publish_queue.append((delivery_tag, drop))
                    del self.drop_store['drops'][corr_id]
+                   
+        self.confirm_queue.put(method.delivery_tag, False)
                         
-        
-   def confirm_drop(self, drop):
-       # Confirm delivery only once droplet has been passed
-       # for metadata extraction
-       self.confirm_queue.put(drop['_internal']['delivery_tag'], False)
-       
    def schedule_posting(self):
        """Schedule processing of the drops deque.
    
@@ -146,7 +152,7 @@ class CallbackWorker(Worker):
    
        # Confirm droplet processing complete
        for delivery_tag in delivery_tags:
-           self.confirm_queue.put(delivery_tag, False)
+           self.drop_confirm_queue.put(delivery_tag, False)
    
        # Reschedule processing of the deque
        self.schedule_posting()
@@ -185,19 +191,19 @@ class DropQueueDaemon(Daemon):
             cb_queue,
             {'exclusive': True,
              'prefetch_count': self.num_workers * self.batch_size})
-             
-        drop_filter_publisher = Publisher("Drop Filter Publisher", mq_host, queue_name='DROP_FILTER_QUEUE')
-        for x in range(self.num_workers):
-            CallbackWorker(
-                "callback-worker-" + str(x), cb_consumer.message_queue, 
-                cb_consumer.confirm_queue, drop_store, cb_queue, 
-                drop_filter_publisher, self.api_url)
 
         drop_consumer = Consumer(
             "dropqueue-consumer", self.mq_host,
             Consumer.DROPLET_QUEUE,
             {'durable_queue': True,
              'prefetch_count': self.num_workers * self.batch_size})
+             
+        drop_filter_publisher = Publisher("Drop Filter Publisher", mq_host, queue_name='DROP_FILTER_QUEUE')
+        for x in range(self.num_workers):
+            CallbackWorker(
+                "callback-worker-" + str(x), cb_consumer.message_queue, 
+                cb_consumer.confirm_queue, drop_consumer.confirm_queue, drop_store, cb_queue, 
+                drop_filter_publisher, self.api_url)
 
         for x in range(self.num_workers):
             DropQueueWorker(
