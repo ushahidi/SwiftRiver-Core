@@ -286,7 +286,7 @@ class MediaExtractorQueueDaemon(Daemon):
                    'prefetch_count': self.num_workers}
         drop_consumer = Consumer("mediaextractor-consumer", self.mq_host, 
                                  'MEDIA_EXTRACTOR_QUEUE', options)        
-        drop_publisher = Publisher("Response Publisher", mq_host, None)
+        drop_publisher = Publisher("Response Publisher", mq_host)
 
         for x in range(self.num_workers):
             MediaExtractorQueueWorker("mediaextractor-worker-" + str(x), 

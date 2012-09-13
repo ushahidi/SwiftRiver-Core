@@ -46,7 +46,8 @@ class Publisher(Thread):
                     channel.queue_declare(queue=self.queue_name, durable=self.durable)
                 
                 if self.exchange_name == '':
-                    self.routing_key = self.queue_name
+                    if self.queue_name is not None:
+                        self.routing_key = self.queue_name
                 else:
                     channel.exchange_declare(exchange=self.exchange_name,
                                              type=self.exchange_type,

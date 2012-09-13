@@ -166,7 +166,7 @@ class SemanticsQueueDaemon(Daemon):
         drop_consumer = Consumer("semanticsqueue-consumer", self.mq_host,
                                  'SEMANTICS_QUEUE', options)
 
-        drop_publisher = Publisher("Response Publisher", mq_host, None)
+        drop_publisher = Publisher("Response Publisher", mq_host)
 
         for x in range(self.num_workers):
             SemanticsQueueWorker("semanticsqueue-worker-" + str(x),
