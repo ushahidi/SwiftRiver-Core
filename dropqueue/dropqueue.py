@@ -94,7 +94,8 @@ class CallbackWorker(Worker):
                        del drop['semantics_complete']
                 
                    delivery_tag = self.drop_store['drops'][corr_id]['delivery_tag']
-                   self.publish_queue.append((delivery_tag, drop))
+                   message = self.drop_store['drops'][corr_id]['drop']
+                   self.publish_queue.append((delivery_tag, message))
                    del self.drop_store['drops'][corr_id]
                    
         self.confirm_queue.put(method.delivery_tag, False)
