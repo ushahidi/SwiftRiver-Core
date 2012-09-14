@@ -196,7 +196,9 @@ class DropQueueDaemon(Daemon):
             "dropqueue-consumer", self.mq_host,
             Consumer.DROPLET_QUEUE,
             {'durable_queue': True,
-             'prefetch_count': self.num_workers * self.batch_size})
+             'prefetch_count': self.num_workers * self.batch_size,
+             'exchange_name': 'drops',
+             'exchange_type': 'direct'})
              
         drop_filter_publisher = Publisher("Drop Filter Publisher", mq_host, queue_name='DROP_FILTER_QUEUE')
         for x in range(self.num_workers):

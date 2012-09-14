@@ -91,4 +91,5 @@ class DropPublisher(Publisher):
 
     def __init__(self, mq_host):
         Publisher.__init__(self, "Drop Publisher", mq_host,
-                            queue_name='DROPLET_QUEUE')
+                            queue_name='DROPLET_QUEUE', 
+                            exchange_name='drops', exchange_type='direct')
