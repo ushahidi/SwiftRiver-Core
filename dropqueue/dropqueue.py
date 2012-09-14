@@ -86,15 +86,12 @@ class CallbackWorker(Worker):
                    log.debug(" %s drop with correlation_id %s has completed metadata extraction" %
                             (self.name, properties.correlation_id))
                 
-                   # Metadata extraction complete, post to the API                   
-                   # We do not send media_complete and semantics complete to the api
-                   if 'media_complete' in drop:
-                       del drop['media_complete']
-                   if 'semantics_complete' in drop:
-                       del drop['semantics_complete']
-                
+                   # Metadata extraction complete, post to the API                                   
                    delivery_tag = self.drop_store['drops'][corr_id]['delivery_tag']
                    message = self.drop_store['drops'][corr_id]['drop']
+                   # We do not send media_complete and semantics complete to the api
+                   del message['media_complete']
+                   del message['semantics_complete']
                    self.publish_queue.append((delivery_tag, message))
                    del self.drop_store['drops'][corr_id]
                    
