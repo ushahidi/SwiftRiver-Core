@@ -238,6 +238,7 @@ class TwitterFirehoseManager(Daemon):
         FROM channel_filters cf, channel_filter_options cfo
         WHERE cfo.channel_filter_id = cf.id
         AND cf.channel = 'twitter'
+        AND cfo.key = 'keyword'
         AND cf.filter_enabled = 1
         """)
 
