@@ -235,8 +235,10 @@ class TwitterFirehoseManager(Daemon):
         c = self.get_cursor()
         c.execute("""
         SELECT river_id, `key`, `value`
-        FROM channel_filters cf, channel_filter_options cfo
-        WHERE cfo.channel_filter_id = cf.id
+        FROM rivers r, channel_filters cf, channel_filter_options cfo
+        WHERE r.id = cf.river_id
+        AND cfo.channel_filter_id = cf.id
+        AND r.river_active = 1
         AND cf.channel = 'twitter'
         AND cfo.key = 'keyword'
         AND cf.filter_enabled = 1

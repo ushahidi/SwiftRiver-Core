@@ -72,8 +72,10 @@ class RssFetchScheduler(Daemon):
         c = self.get_cursor()
         c.execute("""
         select river_id, value
-        from channel_filters cf, channel_filter_options cfo
-        where cf.id = cfo.channel_filter_id
+        from rivers r, channel_filters cf, channel_filter_options cfo
+        where r.id = cf.river_id
+        and cf.id = cfo.channel_filter_id
+        and r.river_active = 1
         and cf.channel = 'rss'
         and cfo.key = 'url'
         and filter_enabled = 1
