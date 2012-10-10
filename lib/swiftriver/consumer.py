@@ -63,9 +63,16 @@ class Consumer(Thread):
                     channel.exchange_declare(exchange=self.exchange_name,
                                              type=self.exchange_type,
                                              durable=self.durable_exchange)
-                    channel.queue_bind(exchange=self.exchange_name,
-                                       queue=self.queue_name,
-                                       routing_key=self.routing_key)
+                    if isinstance(self.routing_key, basestring):
+                        channel.queue_bind(exchange=self.exchange_name,
+                                           queue=self.queue_name,
+                                           routing_key=self.routing_key)
+                    else:
+                        # Bind channel to a list of routing keys
+                        for rk in self.routing_key:
+                            channel.queue_bind(exchange=self.exchange_name,
+                                               queue=self.queue_name,
+                                               routing_key=rk)
 
                 channel.basic_consume(self.handle_message,
                                       queue=self.queue_name)
