@@ -243,7 +243,7 @@ class RssFetchScheduler(Daemon):
                     if not self.rss_urls[url]['rivers']:
                         log.debug(" URL %s has no more rivers. Removing." % (url,))
                         del self.rss_urls[url]
-
+                    
     def update_rss_url(self, update):
         """ Used by the ResponseThread to update the memory and db copies of the rss_url
         with the etag, modified and last_fetch_time
@@ -293,6 +293,7 @@ class RssFetchScheduler(Daemon):
         options = {'exchange_name': 'chatter',
                    'exchange_type': 'topic',
                    'routing_key': ['web.channel_option.rss.*',
+                                   'web.river.*',
                                    'web.channel.rss.*'],
                    'durable_exchange':  True,
                    'prefetch_count': self.num_channel_update_workers}
@@ -361,13 +362,24 @@ class ChannelUpdateHandler(Worker):
                         self.scheduler.del_url(url, river_id)
             elif (re.search("^web.channel", routing_key, re.I)):
                 log.debug(" %s %s channel received %r" % (self.name, routing_key, message))
-                for channel_option in message:
+                for channel_option in message['channel_options']:
                     url = json.loads(channel_option['value'])['value']
                     river_id = int(channel_option['river_id'])
                     if routing_key == 'web.channel.rss.add':
                         self.scheduler.add_url(url, river_id)
                     elif routing_key == 'web.channel.rss.delete':
                         self.scheduler.del_url(url, river_id)
+            elif (re.search("^web.river", routing_key, re.I)):
+                log.debug(" %s river message received %r" % (self.name, message))
+                for channel_option in message['channel_options']:
+                    if channel_option['key'] == 'url' and channel_option['channel'] == 'rss':
+                        url = json.loads(channel_option['value'])['value']
+                        river_id = int(channel_option['river_id'])
+                        if routing_key == 'web.river.enable':
+                            self.scheduler.add_url(url, river_id)
+                        elif routing_key == 'web.river.disable':
+                            self.scheduler.del_url(url, river_id)
+
             self.confirm_queue.put(delivery_tag, False)
             log.debug(" %s channel option processed" % (self.name))
         except Exception, e:
