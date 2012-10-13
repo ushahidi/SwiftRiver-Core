@@ -23,7 +23,7 @@ import socket
 import ssl
 import time
 
-from httlib2 import Http
+from httplib2 import Http
 import MySQLdb
 
 from swiftriver import Daemon, Consumer, Worker
@@ -39,7 +39,7 @@ class UshahidiPosterDaemon(Daemon):
         self.num_workers = num_workers
         self._db_config = db_config
         self._db = None
-        self._http  = Http()
+        self._http = Http()
 
         # Shared lock to control access to the DB by the
         # worker threads
@@ -63,7 +63,7 @@ class UshahidiPosterDaemon(Daemon):
                 self._db.ping(True)
                 cursor = self._db.cursor()
             except MySQLdb.OperationalError, e:
-                log.error("Error connecting to the database (%s)" %e)
+                log.error("Error connecting to the database (%s)" % e)
                 # Wait for 60s before reconnecting
                 time.sleep(60)
 
@@ -96,7 +96,7 @@ class UshahidiPosterDaemon(Daemon):
                 client_id: client_id}
 
             headers = {'Content-type': 'application/x-www-form-urlencoded'}
-            
+
             response = content = None
             while not response:
                 try:
@@ -120,21 +120,21 @@ class UshahidiPosterDaemon(Daemon):
                         time.sleep(30)
                 except socket.error, e:
                     log.error("Error posting drops to Ushahidi (%s)" % e)
-    
+
     def _update_push_log(self, bucket_id, drops):
         """Updates the push log for the specified bucket by setting
         droplet_push_status = 1 for each of the drops"""
-        
+
         log.info("Updating the deployment push log")
 
         query_template = "SELECT %d AS `bucket_id` %d AS `droplet_id`"
         queries = []
         for drop in drops:
             queries.append(query_template % (bucket_id, drop['id']))
-    
+
         # Query to update push log
-        update_query = """UPDATE `deployment_push_logs` AS a 
-        JOIN (%s) AS b ON (b.bucket_id = a.bucket_id) 
+        update_query = """UPDATE `deployment_push_logs` AS a
+        JOIN (%s) AS b ON (b.bucket_id = a.bucket_id)
         SET a.droplet_push_status = 1, a.droplet_push_date = '%s'
         WHERE b.droplet_id = a.droplet_id """
 
@@ -148,12 +148,17 @@ class UshahidiPosterDaemon(Daemon):
         cursor.execute(update_query)
         self._db.commit()
         cursor.close()
-        
+
         log.info("Deployment push log successfully updated")
 
     def run(self):
         """Initializes the daemon and spawns s set of workers to listen
         on the MQ for buckets that are ready to push drops"""
+
+        options = {'exchange_name': 'chatter',
+                   'exchange_type': 'topic',
+                   'routing_key': 'web.bucket.push.ushahidi.*',
+                   'durable_exchange': True}
 
         # Consumer for USHAHIDI_POST_QUEUE
         postqueue_consumer = Consumer(
@@ -164,7 +169,7 @@ class UshahidiPosterDaemon(Daemon):
 
         # Spawn a set of workers to listen for buckets that are ready
         # to post drops
-        for x in range(self.num_works):
+        for x in range(self.num_workers):
             UshahidiPostQueueWorker(
                 "ushahidi-postqueue-worker" + str(x),
                 postqueue_consumer.message_queue,
@@ -178,24 +183,24 @@ class UshahidiPosterDaemon(Daemon):
 
 
 class UshahidiPostQueueWorker(Worker):
-    """Worker thread to listen for and fetch "web.bucket.push.ushahidi" 
+    """Worker thread to listen for and fetch "web.bucket.push.ushahidi"
     messages from the MQ"""
-    
+
     def __init__(self, name, job_queue, confirm_queue, poster):
         Worker.__init__(self, name, job_queue, confirm_queue)
 
         # Poster is an instance of UshahidiPosterDaemon
         self._poster = poster
-    
+
     def work(self):
         try:
             method, properties, body = self.job_queue.get(True)
             # Decode the JSON
-            message  = json.loads(body)
+            message = json.loads(body)
             # Check the routing key
             if method.routing_key == "web.bucket.push.ushahidi":
                 # Post the drops
-                log.info("Posting drops for bucket %s" %message['bucket_id'])
+                log.info("Posting drops for bucket %s" % message['bucket_id'])
                 self._poster.post_drops(
                     message['post_url'], message['drops'],
                     message['bucket_id'], message['client_id'],
