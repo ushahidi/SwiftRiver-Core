@@ -127,10 +127,10 @@ class UshahidiPosterDaemon(Daemon):
 
         log.info("Updating the deployment push log")
 
-        query_template = "SELECT %d AS `bucket_id` %d AS `droplet_id`"
+        query_template = "SELECT %d AS `bucket_id`, %d AS `droplet_id`"
         queries = []
         for drop in drops:
-            queries.append(query_template % (bucket_id, drop['id']))
+            queries.append(query_template % (bucket_id, int(drop['id'])))
 
         # Query to update push log
         update_query = """UPDATE `deployment_push_logs` AS a
@@ -203,7 +203,7 @@ class UshahidiPostQueueWorker(Worker):
                 log.info("Posting drops for bucket %s" % message['bucket_id'])
                 self._poster.post_drops(
                     message['post_url'], message['drops'],
-                    message['bucket_id'], message['client_id'],
+                    int(message['bucket_id']), message['client_id'],
                     message['client_secret'])
         except Exception, e:
             log.error(e)
