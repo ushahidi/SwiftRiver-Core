@@ -69,38 +69,32 @@ class UshahidiPosterDaemon(Daemon):
 
         return cursor
 
-    def _get_pending_drops(self):
-        """Gets the buckets with drops that are ready for posting
-        to Ushahidi. This method is only called once - when the application
-        starts up"""
-        pass
-
     def post_drops(self, post_url, drops, bucket_id, client_id,
                    client_secret):
         """Encodes the drops, computes a checksum and posts them to the
         specified URL. This method is invoked when an
         "web.bucket.push.usahidi" message is received on the MQ """
         # Acquire the lock
-        with self.__lock:
+        with self._lock:
             # Encode the drops as JSON and run a base64 encode
-            drops_payload = b64encode(json.dumps(drops))
-
+            drops_payload = json.dumps(drops)
+            
             # Generate SHA256 hash_hmac on the payload using client_secret
             # as the key
-            h = hmac.new(client_secret, drops_payload, hashlib.sha256())
+            h = hmac.new(client_secret, drops_payload, hashlib.sha256)
 
             # Data to be posted
-            post_data = {
-                drops: drops_payload,
-                checksum: h.hexdigest(),
-                client_id: client_id}
+            post_data = dict(drops=b64encode(drops_payload),
+                             checksum=h.hexdigest(), client_id=client_id)
 
+            log.debug("Checksum for the drops payload %s" % h.hexdigest())
             headers = {'Content-type': 'application/x-www-form-urlencoded'}
 
             response = content = None
             while not response:
                 try:
                     # Post the drops -  HTTP post
+                    log.debug("Sending HTTP POST request to %s" % post_url)
                     response, content = self._http.request(
                         post_url, 'POST', body=urlencode(post_data),
                         headers=headers)
@@ -133,20 +127,31 @@ class UshahidiPosterDaemon(Daemon):
             queries.append(query_template % (bucket_id, int(drop['id'])))
 
         # Query to update push log
-        update_query = """UPDATE `deployment_push_logs` AS a
+        log_update_query = """UPDATE `deployment_push_logs` AS a
         JOIN (%s) AS b ON (b.bucket_id = a.bucket_id)
-        SET a.droplet_push_status = 1, a.droplet_push_date = '%s'
+        SET a.droplet_push_status = 1, a.droplet_date_push = '%s'
         WHERE b.droplet_id = a.droplet_id """
 
         # Get the UTC date
         push_date = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
-        update_query = update_query % (' UNION ALL '.join(queries), push_date)
+        log_update_query = log_update_query % (' UNION ALL '.join(queries), push_date)
+        
+        # Updates the pending drop count
+        pending_drop_count_query = """UPDATE deployment_push_settings
+        SET pending_drop_count = pending_drop_count - %d
+        WHERE pending_drop_count > 0
+        AND bucket_id = %d""" % (len(drops), bucket_id)
 
         cursor = self._get_cursor()
 
-        # Execute the query, commit the transaction and close the cursor
-        cursor.execute(update_query)
+        # Execute the queries and commit the transactions at the end - ensures
+        # atomicity of the transactions - ALL or nothing
+        cursor.execute(log_update_query)
+        cursor.execute(pending_drop_count_query)
+
         self._db.commit()
+    
+        # Close the cursor
         cursor.close()
 
         log.info("Deployment push log successfully updated")
@@ -157,7 +162,7 @@ class UshahidiPosterDaemon(Daemon):
 
         options = {'exchange_name': 'chatter',
                    'exchange_type': 'topic',
-                   'routing_key': 'web.bucket.push.ushahidi.*',
+                   'routing_key': 'web.bucket.push.*',
                    'durable_exchange': True}
 
         # Consumer for USHAHIDI_POST_QUEUE
@@ -202,9 +207,13 @@ class UshahidiPostQueueWorker(Worker):
                 # Post the drops
                 log.info("Posting drops for bucket %s" % message['bucket_id'])
                 self._poster.post_drops(
-                    message['post_url'], message['drops'],
-                    int(message['bucket_id']), message['client_id'],
-                    message['client_secret'])
+                    str(message['post_url']),
+                    message['drops'],
+                    int(message['bucket_id']),
+                    str(message['client_id']),
+                    str(message['client_secret']))
+
+                self.confirm_queue.put(method.delivery_tag, False)
         except Exception, e:
             log.error(e)
 

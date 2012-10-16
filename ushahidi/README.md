@@ -15,7 +15,8 @@ __NOTE__ The payload from the MQ contains the following information:
  * URL of the target deployment
 
 ## System Requirements
-Python 2.6+
+
+ * Python 2.6+
 
 ## Required Libraries
 The following extra Python libraries are required by the application:
