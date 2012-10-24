@@ -180,7 +180,6 @@ class RssFetchScheduler(Daemon):
         """
         log.info("Starting scheduler")
         while True:
-            log.debug("self.rss_urls= %r" % self.rss_urls)
             # Get all non submitted urls that are due for a fetch based on the last_fetch time
             jobs = []
             with self.lock:
@@ -360,25 +359,20 @@ class ChannelUpdateHandler(Worker):
                         self.scheduler.add_url(url, river_id)
                     elif routing_key == 'web.channel_option.rss.delete':
                         self.scheduler.del_url(url, river_id)
-            elif (re.search("^web.channel", routing_key, re.I)):
-                log.debug(" %s %s channel received %r" % (self.name, routing_key, message))
+            elif (re.search("^web.(channel|river)", routing_key, re.I)):
+                log.debug(" %s %s received %r" % (self.name, routing_key, message))
                 for channel_option in message['channel_options']:
                     url = json.loads(channel_option['value'])['value']
                     river_id = int(channel_option['river_id'])
-                    if routing_key == 'web.channel.rss.add':
+                    channel = channel_option['channel']
+                    if (routing_key == 'web.channel.rss.add' or \
+                        routing_key == 'web.river.enable') and \
+                        channel == 'rss':
                         self.scheduler.add_url(url, river_id)
-                    elif routing_key == 'web.channel.rss.delete':
+                    elif (routing_key == 'web.channel.rss.delete' or \
+                          routing_key == 'web.river.disable') and  \
+                          channel == 'rss':
                         self.scheduler.del_url(url, river_id)
-            elif (re.search("^web.river", routing_key, re.I)):
-                log.debug(" %s river message received %r" % (self.name, message))
-                for channel_option in message['channel_options']:
-                    if channel_option['key'] == 'url' and channel_option['channel'] == 'rss':
-                        url = json.loads(channel_option['value'])['value']
-                        river_id = int(channel_option['river_id'])
-                        if routing_key == 'web.river.enable':
-                            self.scheduler.add_url(url, river_id)
-                        elif routing_key == 'web.river.disable':
-                            self.scheduler.del_url(url, river_id)
 
             self.confirm_queue.put(delivery_tag, False)
             log.debug(" %s channel option processed" % (self.name))
