@@ -1,0 +1,14 @@
+[main]
+log_file=/path/to/logs/ushahidi.log
+out_file=/path/to/logs/ushahidi.out
+pid_file=/path/to/ushahidi.pid
+num_workers=10
+log_level=DEBUG
+mq_host=localhost
+
+[db]
+host=localhost
+port=3306
+user=
+pass=
+database=
