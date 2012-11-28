@@ -1,0 +1,16 @@
+[main]
+log_file=/path/to/commentsd.log
+out_file=/path/to/commentsd.out
+pid_file=/path/to/commentsd.pid
+log_level=DEBUG
+listen_port=10026
+api_url=http://swiftweb.local/api/
+api_key=bdcc5705898d61b3de1b71ee1c007b70
+
+[db]
+host=localhost
+port=3306
+user=root
+pass=
+database=swiftweb
+

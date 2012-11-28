@@ -17,7 +17,8 @@ import logging as log
 import asyncore
 import email
 import hashlib
-import dateutil.parser
+import re
+import json
 from os.path import dirname, realpath
 from smtpd import SMTPChannel, SMTPServer
 
@@ -25,44 +26,43 @@ import MySQLdb
 
 from swiftriver import Daemon, DropPublisher
 from cloudfiles.connection import ConnectionPool
+from httplib2 import Http
 
 
-class EmailDaemon(Daemon):
+class CommentsDaemon(Daemon):
 
     def __init__(self,
                  port,
-                 mq_host,
                  db_config,
+                 api_url,
+                 api_key,
                  pid_file,
-                 out_file,
-                 cf_options):
+                 out_file):
         Daemon.__init__(self, pid_file, out_file, out_file, out_file)
 
         self.port = port
-        self.mq_host = mq_host
         self.db_config = db_config
+        self.api_url = api_url
+        self.api_key = api_key
         self.db = None
-        self.cf_options = cf_options
 
     def run(self):
-        log.info("Email Daemon Started")
-        drop_publisher = DropPublisher(mq_host)
+        log.info("Comments Daemon Started")
         server = LMTPServer(('localhost', self.port),
-                            self.db_config,
-                            drop_publisher,
-                            self.cf_options)
+                            self.db_config, self.api_url, self.api_key)
         asyncore.loop()
 
 
 class LMTPServer(SMTPServer):
 
-    def __init__(self, localaddr, db_config, drop_publisher, cf_options):
+    def __init__(self, localaddr, db_config, api_url, api_key):
         SMTPServer.__init__(self, localaddr, None)
 
-        self.drop_publisher = drop_publisher
         self.db_config = db_config
+        self.api_url = api_url
+        self.api_key = api_key
+        self.h = Http()
         self.db = None
-        self.cf_options = cf_options
 
     def process_message(self, peer, mailfrom, rcptto, data):
         try:
@@ -72,6 +72,11 @@ class LMTPServer(SMTPServer):
             return "451 Error in processing"
 
     def __parse_message(self, peer, mailfrom, rcptto, data):
+        """Handle message data.
+
+        Extract the message content and post it to the drop comment api endpoint
+
+        """
         host, port = peer
         log.debug(("Received %d byte long message from %s:%d with " +
                    "envelope from '%s' to '%s'") %
@@ -88,46 +93,37 @@ class LMTPServer(SMTPServer):
             log.debug("No content found")
             return
 
-        attachments = self.__get_attachments(msg)
-
-        rivers = self.__get_rivers(rcptto)
-        if not rivers:
-            log.debug("No matching rivers")
+        tokens = self.__get_tokens(rcptto)
+        if not tokens:
+            log.debug("No matching tokens")
             return
-
-        if not msg.get("Subject"):
-            log.debug("No subject")
-            return
-
-        droplet_date_pub = dateutil.parser.parse(msg.get("Date")) \
-                                          .strftime('%Y-%m-%d %H:%M:%S')
-
-        drop = {
-            'channel': 'email',
-            'river_id': rivers,
-            'identity_orig_id': mailfrom,
-            'identity_username': mailfrom,
-            'identity_name': mailfrom,
-            'identity_avatar': None,
-            'droplet_orig_id': hashlib.md5((mailfrom + str(rcptto) + data)
-                                           .encode('utf-8'))
-                                           .hexdigest(),
-            'droplet_type': 'original',
-            'droplet_title': msg.get("Subject"),
-            'droplet_content': content,
-            'droplet_raw': content,
-            'droplet_locale': None,
-            'droplet_date_pub': droplet_date_pub}
-
-        if attachments:
-            drop['media'] = []
-            for a in attachments:
-                drop['media'].append({'url': a['url'],
-                                      'type': a['type'],
-                                      'droplet_image': False})
-
-        self.drop_publisher.publish(drop)
-        log.debug("Drop published to the following rivers: %r" % rivers)
+            
+        comment = {
+            'comment_text': content,
+            'from_email': mailfrom}
+            
+        for token in tokens:
+            token_type, data = token;
+            log.debug("Posting %s comment for drop" % token_type,)
+            
+            resp = None
+            if token_type == 'drop-comment':
+                post_url = self.api_url + 'drop/' + str(data['drop_id']) + '/comment'
+                post_url += '?api_key=' + api_key
+                post_data = dict(comment.items() + 
+                                {'context': data['context'], 
+                                'context_obj_id': data['context_obj_id']}.items())
+                resp, content = self.h.request(post_url, 'POST',
+                                               body=json.dumps(post_data))
+            else:
+                post_url = self.api_url + 'bucket/' + str(data['bucket_id']) + '/comment'
+                post_url += '?api_key=' + api_key
+                resp, content = self.h.request(post_url, 'POST',
+                                               body=json.dumps(comment))
+            # If server error, keep retrying
+            if resp.status >= 500:
+                log.error("NOK response from the API (%d)" % resp.status)
+                raise Exception
 
     def __get_content(self, msg):
         """Content is the first message part.
@@ -145,37 +141,14 @@ class LMTPServer(SMTPServer):
         else:
             return self.__get_content(msg.get_payload()[0])
 
-    def __get_attachments(self, msg):
-        """Push attachments to cloudfiles."""
-        if not msg.is_multipart():
-            return None
-
-        urls = []
-        cf_conn = self.cf_options['conn_pool'].get()
-        container = cf_conn.get_container(self.cf_options['container'])
-        for m in msg.get_payload()[1:]:
-            payload = m.get_payload(decode=True)
-            if m.get_content_maintype() == 'text':
-                charset = m.get_content_charset('utf-8')
-                payload = payload.decode(charset).encode('utf-8')
-            filename = hashlib.sha256(payload).hexdigest()
-            cloudfile = container.create_object(filename)
-            cloudfile.content_type = m.get_content_type()
-            cloudfile.write(payload)
-            urls.append({'url': cloudfile.public_ssl_uri(),
-                      'type': m.get_content_maintype()})
-        self.cf_options['conn_pool'].put(cf_conn)
-        return urls
-
-    def __get_rivers(self, rcptto):
+    def __get_tokens(self, rcptto):
         c = self.get_cursor()
         format_strings = ','.join(['%s'] * len(rcptto))
-        c.execute("""select `id`
-                  from `rivers`
-                  where river_active = 1
-                  and email_id in (%s)""" % format_strings,
-                  tuple([email.split('@')[0] for email in rcptto]))
-        return [river_id for river_id, in c.fetchall()]
+        recipients = tuple([re.sub(r'^(drop|bucket)-comment-', r'', email.split('@')[0]) for email in rcptto])
+        c.execute("""select `type`, `data`
+                  from `auth_tokens`
+                  where token in (%s)""" % format_strings, recipients)
+        return [(token_type, json.loads(data)) for token_type, data in c.fetchall()]
 
     def handle_accept(self):
         conn, addr = self.accept()
@@ -213,7 +186,7 @@ class LMTPChannel(SMTPChannel):
 if __name__ == "__main__":
     config = ConfigParser.SafeConfigParser()
     config.readfp(open(dirname(realpath(__file__)) +
-                  '/config/emailchannel.cfg'))
+                  '/config/commentsd.cfg'))
 
     try:
         log_file = config.get("main", 'log_file')
@@ -221,19 +194,14 @@ if __name__ == "__main__":
         pid_file = config.get("main", 'pid_file')
         log_level = config.get("main", 'log_level')
         listen_port = config.getint("main", 'listen_port')
-        mq_host = config.get("main", 'mq_host')
+        api_url = config.get("main", 'api_url')
+        api_key = config.get("main", 'api_key')
         db_config = {
             'host': config.get("db", 'host'),
             'port': config.getint("db", 'port'),
             'user': config.get("db", 'user'),
             'pass': config.get("db", 'pass'),
             'database': config.get("db", 'database')}
-        cf_options = {
-            'username': config.get("cloudfiles", 'username'),
-            'api_key': config.get("cloudfiles", 'api_key'),
-            'container': config.get("cloudfiles", 'container')}
-        cf_options['conn_pool'] = ConnectionPool(cf_options['username'],
-                                                 cf_options['api_key'])
 
         FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
         log.basicConfig(filename=log_file,
@@ -242,12 +210,12 @@ if __name__ == "__main__":
         # Create outfile if it does not exist
         file(out_file, 'a')
 
-        daemon = EmailDaemon(listen_port,
-                             mq_host,
+        daemon = CommentsDaemon(listen_port,
                              db_config,
+                             api_url,
+                             api_key,
                              pid_file,
-                             out_file,
-                             cf_options)
+                             out_file)
         if len(sys.argv) == 2:
             if 'start' == sys.argv[1]:
                 daemon.start()
