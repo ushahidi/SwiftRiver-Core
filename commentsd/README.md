@@ -21,7 +21,7 @@ Installation of Required Libraries
 Ubuntu/Debian Installation
 -------------------------------------
 
-        $ sudo apt-get install python-mysqldb
+        $ sudo apt-get install python-mysqldb python-httplib2 
         
 Running the applications
 ========================= 
