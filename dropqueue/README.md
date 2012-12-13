@@ -22,7 +22,7 @@ Installation of Required Libraries
 Ubuntu/Debian Installation
 -------------------------------------
 
-        $ sudo apt-get install python-pip
+        $ sudo apt-get install python-pip python-httplib2 
         $ pip install pika
         
 Running the applications
