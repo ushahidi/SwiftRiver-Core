@@ -121,7 +121,7 @@ class RssFetcherWorker(Worker):
                 droplet_orig_id_str = (entry.get('link', '') +
                                        entry.get('id', ''))
                 # Date when the article was published
-                droplet_date_pub = time.strftime('%Y-%m-%d %H:%M:%S',
+                droplet_date_pub = time.strftime('%a, %d %b %Y %H:%M:%S +0000',
                                                  entry.get('date_parsed',
                                                            time.gmtime()))
                 drop = {
