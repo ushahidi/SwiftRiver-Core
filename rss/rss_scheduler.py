@@ -73,19 +73,17 @@ class RssFetchScheduler(Daemon):
 
         c = self.get_cursor()
         c.execute("""
-        select river_id, value
-        from rivers r, channel_filters cf, channel_filter_options cfo
-        where r.id = cf.river_id
-        and cf.id = cfo.channel_filter_id
+        select river_id, parameters
+        from rivers r, river_channels rc
+        where r.id = rc.river_id
         and r.river_active = 1
-        and cf.channel = 'rss'
-        and cfo.key = 'url'
-        and filter_enabled = 1
+        and rc.channel = 'rss'
+        and rc.active = 1
         """)
 
         urls = {}
-        for river_id, value in c.fetchall():
-            url = json.loads(value)['value']
+        for river_id, parameters in c.fetchall():
+            url = json.loads(parameters)['value']
             if not urls.has_key(url):
                 urls[url] = set()
             urls[url].add(int(river_id))
