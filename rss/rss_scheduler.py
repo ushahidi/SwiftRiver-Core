@@ -65,15 +65,15 @@ class RssFetchScheduler(Daemon):
 
         return cursor;
 
-    def get_channel_filter_urls(self):
+    def get_river_channel_urls(self):
         """
-        Get a list of urls from the channel_filter_options table
+        Get a list of urls from the river_channels table
         and return with the rivers ids grouped per url
         """
 
         c = self.get_cursor()
         c.execute("""
-        select river_id, parameters
+        select rc.id AS channel_id, river_id, parameters
         from rivers r, river_channels rc
         where r.id = rc.river_id
         and r.river_active = 1
@@ -82,14 +82,16 @@ class RssFetchScheduler(Daemon):
         """)
 
         urls = {}
-        for river_id, parameters in c.fetchall():
+        for channel_id, river_id, parameters in c.fetchall():
             url = json.loads(parameters)['value']
             if not urls.has_key(url):
-                urls[url] = set()
-            urls[url].add(int(river_id))
+                urls[url] = {'rivers': set(), 'channels': set()}
+
+            urls[url]['rivers'].add(int(river_id))
+            urls[url]['channels'].add(int(channel_id))
 
         c.close()
-        log.debug("channel_filter_urls fetched %r" % urls)
+        log.debug("river_channel_urls fetched %r" % urls)
         return urls
 
     def get_rss_urls(self):
@@ -124,14 +126,13 @@ class RssFetchScheduler(Daemon):
         """ Initializes the local url cache """
         self.get_rss_urls()
         cached_urls = set([url for url in self.rss_urls])
-        channel_filters = self.get_channel_filter_urls()
-        channel_filter_urls = set([url for url in channel_filters])
-        
-        
+        river_channels = self.get_river_channel_urls()
+        river_channel_urls = set([url for url in river_channels])
+
         with self.lock:
             # Add urls missing in the local cache that exist in the
             # channel filters table
-            added_urls =  channel_filter_urls - cached_urls
+            added_urls =  river_channel_urls - cached_urls
             log.info("%d urls have been added." % len(added_urls))
             log.debug(added_urls)
             if len(added_urls):
@@ -152,7 +153,7 @@ class RssFetchScheduler(Daemon):
 
             # Remove rivers from the local cache that have been removed
             # from the channel filters table
-            deleted_urls = cached_urls - channel_filter_urls
+            deleted_urls = cached_urls - river_channel_urls
             log.info("%d urls have been deleted." % len(deleted_urls))
             log.debug(deleted_urls)
             if len(deleted_urls):
@@ -167,7 +168,8 @@ class RssFetchScheduler(Daemon):
 
             # Add river ids to the in memory cache
             for url in self.rss_urls:
-                self.rss_urls[url]['rivers'] = channel_filters[url]
+                self.rss_urls[url]['rivers'] = river_channels[url]['rivers']
+                self.rss_urls[url]['channels'] = river_channels[url]['channels']
                 
         log.info("%d urls loaded" % len(self.rss_urls))
 
@@ -198,6 +200,7 @@ class RssFetchScheduler(Daemon):
                     self.fetch_publisher.publish({
                         'url': job['url'],
                         'river_ids': list(self.rss_urls[job['url']]['rivers']),
+                        'channel_ids': list(self.rss_urls[job['url']]['channels']),
                         'last_fetch_time': self.rss_urls[job['url']]['last_fetch_time'],
                         'last_fetch_etag': self.rss_urls[job['url']]['last_fetch_etag'],
                         'last_fetch_modified': self.rss_urls[job['url']]['last_fetch_modified'],
@@ -206,7 +209,7 @@ class RssFetchScheduler(Daemon):
 
             time.sleep(60)
 
-    def add_url(self, url, river_id):
+    def add_url(self, url, river_id, channel_id):
         with self.lock:
             if not self.rss_urls.has_key(url):
                 log.debug(" Adding new url %s for river id %d" % (url, river_id))
@@ -219,22 +222,25 @@ class RssFetchScheduler(Daemon):
                     'rivers': set()
                 }
             self.rss_urls[url]['rivers'].add(river_id);
+            self.rss_urls[url]['channels'].add(channel_id)
             self.fetch_publisher.publish({
                 'url': url,
                 'river_ids': list(self.rss_urls[url]['rivers']),
+                'channel_ids': list(self.rss_urls[job['url']]['channels']),
                 'last_fetch_time': self.rss_urls[url]['last_fetch_time'],
                 'last_fetch_etag': self.rss_urls[url]['last_fetch_etag'],
                 'last_fetch_modified': self.rss_urls[url]['last_fetch_modified'],
                 'use_cache': True
             })
 
-    def del_url(self, url, river_id):
+    def del_url(self, url, river_id, channel_id):
         with self.lock:
             if self.rss_urls.has_key(url):
                 if river_id in self.rss_urls[url]['rivers']:
                     log.debug(" Deleting url %s for river id %d" % (url, river_id))
                     # Remove the river id from local url cache
                     self.rss_urls[url]['rivers'].remove(river_id)
+                    self.rss_urls[url]['rivers'].remove(channel_id)
                     
                     # If no more rivers associated with a url
                     if not self.rss_urls[url]['rivers']:
@@ -351,23 +357,26 @@ class ChannelUpdateHandler(Worker):
                 if message['channel'] == 'rss':
                     log.debug(" %s %s channel received %r" % (self.name, routing_key, message))
                     url = json.loads(message['parameters'])['value']
-                    river_id = int(message['river_id'])                    
+                    river_id = int(message['river_id'])
+                    channel_id = int(message['id'])
                     if routing_key == 'web.channel.rss.add':
-                        self.scheduler.add_url(url, river_id)
+                        self.scheduler.add_url(url, river_id, channel_id)
                     elif routing_key == 'web.channel.rss.delete':
-                        self.scheduler.del_url(url, river_id)
+                        self.scheduler.del_url(url, river_id, channel_id)
             elif (re.search("^web.river", routing_key, re.I)):
                 log.debug(" %s %s received %r" % (self.name, routing_key, message))
                 for channel_option in message['channels']:
                     url = json.loads(channel_option['parameters'])['value']
                     river_id = int(channel_option['river_id'])
+                    channel_id = int(channel_option['channel_id'])
                     channel = channel_option['channel']
+
                     if routing_key == 'web.river.enable' and \
                         channel == 'rss':
-                        self.scheduler.add_url(url, river_id)
+                        self.scheduler.add_url(url, river_id, channel_id)
                     elif routing_key == 'web.river.disable' and  \
                           channel == 'rss':
-                        self.scheduler.del_url(url, river_id)
+                        self.scheduler.del_url(url, river_id, channel_id)
 
             self.confirm_queue.put(delivery_tag, False)
             log.debug(" %s channel option processed" % (self.name))

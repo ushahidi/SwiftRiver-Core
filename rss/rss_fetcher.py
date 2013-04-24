@@ -70,6 +70,7 @@ class RssFetcherWorker(Worker):
                 drop_count += 1
                 drop = pickle.loads(db_drop)
                 drop['river_id'] = message['river_ids']
+                drop['channel_ids'] = message['channel_ids']
                 self.drop_publisher.publish(drop)
 
             c.close()
@@ -127,6 +128,7 @@ class RssFetcherWorker(Worker):
                 drop = {
                     'channel': 'rss',
                     'river_id': message['river_ids'],
+                    'channel_ids': message['channel_ids'],
                     'identity_orig_id': message['url'],
                     'identity_username': d.feed.get('link', message['url']),
                     'identity_name': identity_name,
