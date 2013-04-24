@@ -40,6 +40,7 @@ class SemanticsQueueWorker(Worker):
         delivery_tag = method.delivery_tag
         start_time = time.time()
         droplet = json.loads(body)
+
         log.info(" %s droplet received with correlation_id %s" %
                  (self.name, properties.correlation_id))
 
@@ -95,7 +96,7 @@ class SemanticsQueueWorker(Worker):
                         (self.name, msg))
                     time.sleep(60) #Retry after 60 seconds
 
-            log.debug('%s sematics API said %r' % (self.name, content))
+            log.info('%s sematics API said %r' % (self.name, content))
             if content:
                 response = json.loads(content)
 

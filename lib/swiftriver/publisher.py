@@ -30,7 +30,7 @@ class Publisher(Thread):
         self.start()
 
     def publish(self, item, callback=None, reply_to=None, corr_id=None, routing_key=None):
-        self.q.put((item, callback, reply_to, corr_id, routing_key), False)
+        self.q.put((item, callback, reply_to, corr_id, routing_key), False)        
 
     def run(self):
         # Connect to the MQ, retry on failure
@@ -38,8 +38,7 @@ class Publisher(Thread):
             log.info("%s started" % self.name)
             try:
                 connection = pika.BlockingConnection(
-                            pika.ConnectionParameters(host=self.mq_host),
-                            pika.reconnection_strategies.SimpleReconnectionStrategy())
+                            pika.ConnectionParameters(host=self.mq_host))
                 channel = connection.channel()
                 
                 if self.queue_name is not None:
@@ -50,7 +49,7 @@ class Publisher(Thread):
                         self.routing_key = self.queue_name
                 else:
                     channel.exchange_declare(exchange=self.exchange_name,
-                                             type=self.exchange_type,
+                                             exchange_type=self.exchange_type,
                                              durable=self.durable)
 
                 while True:
