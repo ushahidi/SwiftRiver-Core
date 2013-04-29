@@ -219,14 +219,15 @@ class RssFetchScheduler(Daemon):
                     'last_fetch_etag': None,
                     'last_fetch_modified': None,
                     'submitted': False,
-                    'rivers': set()
+                    'rivers': set(),
+                    'channels': set()
                 }
             self.rss_urls[url]['rivers'].add(river_id);
             self.rss_urls[url]['channels'].add(channel_id)
             self.fetch_publisher.publish({
                 'url': url,
                 'river_ids': list(self.rss_urls[url]['rivers']),
-                'channel_ids': list(self.rss_urls[job['url']]['channels']),
+                'channel_ids': list(self.rss_urls[url]['channels']),
                 'last_fetch_time': self.rss_urls[url]['last_fetch_time'],
                 'last_fetch_etag': self.rss_urls[url]['last_fetch_etag'],
                 'last_fetch_modified': self.rss_urls[url]['last_fetch_modified'],

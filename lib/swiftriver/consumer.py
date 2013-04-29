@@ -197,7 +197,6 @@ class Consumer(Thread):
         the consumer with RabbitMQ
 
         """
-
         logger.info("Stopping")
         self._closing = True
         if self._channel:
