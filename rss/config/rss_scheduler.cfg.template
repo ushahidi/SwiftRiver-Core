@@ -1,7 +1,7 @@
 [main]
-log_file=/path/to/rss-scheduler.log
-out_file=/path/to/rss-scheduler.out
-pid_file=/path/to/rss-scheduler.pid
+log_file=/path/to/logs/rss_scheduler.log
+out_file=/path/to/logs/rss_scheduler.out
+pid_file=/path/to/rss_scheduler.pid
 num_response_workers=10
 num_channel_update_workers=10
 log_level=DEBUG

@@ -1,7 +1,7 @@
 [main]
-log_file=/path/to/logs/rss-fetcher.log
-out_file=/path/to/logs/rss-fetcher.out
-pid_file=/path/to/rss-fetcher.pid
+log_file=/path/to/logs/rss_fetcher.log
+out_file=/path/to/logs/rss_fetcher.out
+pid_file=/path/to/rss_fetcher.pid
 num_workers=10
 log_level=DEBUG
 mq_host=localhost
