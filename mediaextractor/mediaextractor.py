@@ -50,7 +50,8 @@ class MediaExtractorQueueWorker(Worker):
         method, properties, body = self.job_queue.get(True)
         delivery_tag = method.delivery_tag
         start_time = time.time()
-        droplet = json.loads(body)         
+        droplet = json.loads(body)
+
         log.info(" %s drop received with correlation_id %s" %
                  (self.name, properties.correlation_id))
 
@@ -255,7 +256,7 @@ class MediaExtractorQueueWorker(Worker):
                     if m:
                         url = m.group(1)
             else:
-                log.debug(" %s bad status line %s" % (self.name, status_line))
+                log.info(" %s bad status line %s" % (self.name, status_line))
             f.close()
             
             return self.get_full_url(url, depth+1)

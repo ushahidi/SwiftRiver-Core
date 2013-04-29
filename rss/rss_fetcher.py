@@ -70,6 +70,7 @@ class RssFetcherWorker(Worker):
                 drop_count += 1
                 drop = pickle.loads(db_drop)
                 drop['river_id'] = message['river_ids']
+                drop['channel_ids'] = message['channel_ids']
                 self.drop_publisher.publish(drop)
 
             c.close()
@@ -121,12 +122,13 @@ class RssFetcherWorker(Worker):
                 droplet_orig_id_str = (entry.get('link', '') +
                                        entry.get('id', ''))
                 # Date when the article was published
-                droplet_date_pub = time.strftime('%Y-%m-%d %H:%M:%S',
+                droplet_date_pub = time.strftime('%a, %d %b %Y %H:%M:%S +0000',
                                                  entry.get('date_parsed',
                                                            time.gmtime()))
                 drop = {
                     'channel': 'rss',
                     'river_id': message['river_ids'],
+                    'channel_ids': message['channel_ids'],
                     'identity_orig_id': message['url'],
                     'identity_username': d.feed.get('link', message['url']),
                     'identity_name': identity_name,
