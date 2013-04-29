@@ -1,9 +1,0 @@
-[main]
-log_file=/path/to/logs/dropqueue.log
-out_file=/path/to/logs/dropqueue.out
-pid_file=/path/to/dropqueue.pid
-num_workers=10
-batch_size=1000
-log_level=DEBUG
-api_url=http://swiftweb.local/api/drop?api_key=abracadabra
-mq_host=localhost
