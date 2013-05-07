@@ -16,16 +16,16 @@ def flatten_filter_predicates(predicates):
     """
     combined = {}
     for k, v in predicates.iteritems():
-        for term, river_ids in v.iteritems():
+        for term, channels in v.iteritems():
             try:
-                combined[term].update(set(river_ids))
+                combined[term].update(channels)
             except KeyError:
-                combined[term] = set(river_ids)
+                combined[term] = channels
 
     # Final set - generate the tuples
     output = []
     for k, v in combined.iteritems():
-        output.append((k, list(v)))
+        output.append((k, v))
 
     return output
 

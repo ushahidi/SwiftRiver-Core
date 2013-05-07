@@ -37,7 +37,7 @@ def predicate_match(L):
 
     if len(search_pattern) == 1:
         pattern = regex_template % (L[0], L[0])
-        return [] if re.search(pattern, L[2], re.IGNORECASE) is None else L[1]
+        return {} if re.search(pattern, L[2], re.IGNORECASE) is None else L[1]
     elif len(search_pattern) > 1:
         # Returns the river ids if each element in the pattern is
         # in the search string
@@ -47,14 +47,14 @@ def predicate_match(L):
             pattern = regex_template % (p, p)
             occurrence += 1 if re.search(pattern, L[2], re.IGNORECASE) else 0
 
-        return L[1] if occurrence >= len(search_pattern) else []
+        return L[1] if occurrence >= len(search_pattern) else {}
 
 
 class FilterPredicateMatcher(Worker):
     """ Predicate matching thread"""
 
-    def __init__(self, drop_publisher, predicates, drop_queue,
-                 follow_match=False):
+    def __init__(self, drop_publisher, predicates,
+                 drop_queue, follow_match=False):
 
         self.drop_publisher = drop_publisher
         self.pool = Pool()
@@ -62,7 +62,6 @@ class FilterPredicateMatcher(Worker):
         # Internal predicate registry
         self.predicates = {} if follow_match else []
         self.follow_match = follow_match
-
         for t in predicates:
             if self.follow_match:
                 self.predicates[t[0]] = t[1]
@@ -73,16 +72,16 @@ class FilterPredicateMatcher(Worker):
 
     def work(self):
         start_time, drop = self.job_queue.get(True)
-        river_ids = []
+        channels = []
         if self.follow_match:
             identity_orig_id = drop['identity_orig_id']
             in_reply_to_user_id = drop['in_reply_to_user_id']
             
             if identity_orig_id in self.predicates:
-                river_ids = self.predicates[identity_orig_id]
+                channels = self.predicates[identity_orig_id]
 
             if in_reply_to_user_id in self.predicates:
-                river_ids += self.predicates[in_reply_to_user_id]
+                channels += self.predicates[in_reply_to_user_id]
         else:
             predicates = []
             for t in self.predicates:
@@ -90,18 +89,23 @@ class FilterPredicateMatcher(Worker):
                 item.append(drop['droplet_raw'])
                 predicates.append(tuple(item))
             
-            river_ids = self.pool.map(predicate_match, predicates)
+            channels = self.pool.map(predicate_match, predicates)
 
-            # Flatten the river ids into a set
-            river_ids = list(itertools.chain(*river_ids))
-            
-        river_ids = list(set(river_ids))
-        if len(river_ids) > 0:
+        river_ids = []
+        channel_ids = []
+        for channel in channels:
+            for channel_id, rivers in channel.iteritems():
+                river_ids.append(rivers)
+                channel_ids.append(channel_id)
+
+        if len(river_ids) > 0 and len(channel_ids) > 0:
             # Log
-            log.debug("Droplet content: %s, Rivers: %s Processing Time: %f" %
+            log.info("Droplet content: %s, Rivers: %s Processing Time: %f" %
                       (drop['droplet_content'], river_ids, time.time()-start_time))
 
-            drop['river_id'] = river_ids
+            drop['river_id'] = list(set(river_ids))
+            drop['channel_ids'] = list(set(channel_ids))
+
             self.drop_publisher.publish(drop)
 
 
@@ -365,15 +369,15 @@ class TwitterFirehose(Daemon):
         # Predicates may not have changed but a river may have stopped
         # using a track or follow predicate
         for k, v in predicates.iteritems():
-            for predicate, rivers in v.iteritems():
+            for predicate, channels in v.iteritems():
                 try:
-                    current_rivers = self.predicates[k][predicate]
-                    diff = list(set(current_rivers) - set(rivers))
-                    if len(diff) > 0:
-                        if k == 'track':
-                            self.track_changed = True
-                        elif k == 'follow':
-                            self.follow_changed = True
+                    for channel_id in rivers.keys():
+                        changed = self.predicates[k][predicate].has_key(channel_id)
+                        if changed:
+                            if k == 'track':
+                                self.track_changed = True
+                            elif k == 'follow':
+                                self.follow_changed = True
                 except KeyError:
                     if k == 'track':
                         self.track_changed = True
@@ -408,7 +412,7 @@ class FirehoseStreamListener(StreamListener):
 
         # Flatten the fiter predicates
         self.predicate_list = utils.flatten_filter_predicates(predicates)
-        
+
         self.drop_queue = Queue()
         # Spawn a predicate match worker
         FilterPredicateMatcher(self.drop_publisher,
@@ -431,7 +435,7 @@ class FirehoseStreamListener(StreamListener):
                     self.firehose = None
 
                 # Twitter uses RFC822 dates, parse them as such
-                droplet_date_pub = time.strftime('%Y-%m-%d %H:%M:%S',
+                droplet_date_pub = time.strftime('%a, %d %b %Y %H:%M:%S +0000',
                                                  rfc822.parsedate(
                                                     payload['created_at']))
 

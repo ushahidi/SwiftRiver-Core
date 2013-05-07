@@ -5,6 +5,7 @@ import ConfigParser
 import json
 import logging as log
 import pickle
+import re
 import socket
 import sys
 import time
@@ -47,7 +48,7 @@ class TwitterFirehoseManager(Daemon):
         self.predicates = {}
 
         # Tracks whether the predicates have changed
-        self.predicates_changed = False
+        self._predicates_changed = False
 
         self.cache_file = cache_file
 
@@ -76,119 +77,80 @@ class TwitterFirehoseManager(Daemon):
 
         return cursor
 
-    def add_filter_predicate(self, payload):
+    def add_filter_predicate(self, parameters, river_id, channel_id):
         """ Adds a filter predicate to the firehose """
+        has_changed = False
+        for key, filter_predicate in parameters.iteritems():
+            predicate_type = self._get_predicate_type(key)
 
-        # Grab essential data
-        predicate_type = self._get_predicate_type(payload['key'])
-        filter_predicate = json.loads(payload['value'])['value']
-        river_id = payload['river_id']
+            # Get the update target
+            update_target = self.predicates.get(predicate_type, dict())
+            current_target = dict(update_target)
 
-        # Get the update target
-        update_target = self.predicates.get(predicate_type, dict())
-        current_target = dict(update_target)
+            # Check for filter predicate limits
+            if not utils.allow_filter_predicate(self.predicates, predicate_type):
+                log.error("The predicate quota for %s is maxed out." %
+                          predicate_type)
+                break
 
-        # Check for filter predicate limits
-        if not utils.allow_filter_predicate(self.predicates, predicate_type):
-            log.error("The predicate quota for %s is maxed out." %
-                      predicate_type)
-            return
+            # Proceed
+            self._sanitize_filter_predicate(predicate_type,
+                filter_predicate, update_target, river_id, channel_id)
 
-        # Proceed
-        self._sanitize_filter_predicate(predicate_type, filter_predicate,
-                                        update_target, river_id)
+            # set-to-list conversion
+            for k, v in update_target.iteritems():
+                for channel_id, river_id in v.iteritems():
+                    update_target[k][channel_id] = river_id
 
-        # Update twitter cache
-        self._update_twitter_cache()
+            # Update internal list of predicates
+            self.predicates[predicate_type] = update_target
+            has_changed = True
 
-        # set-to-list conversion
-        for k, v in update_target.iteritems():
-            update_target[k] = list(v)
-
-        # Update internal list of predicates
-        self.predicates[predicate_type] = update_target
-
-        publish_data = {}
-        if len(current_target) == 0:
-            # Predicate type was non-existent before sanitization,
-            # ignore diff compute
-            publish_data[predicate_type] = update_target
-        else:
-            # Predicate type existing prior to sanitization, compute diff
-            new_predicates = list(set(update_target.keys()) -
-                                  set(current_target.keys()))
-
-            # Check for new predicates
-            if len(new_predicates) > 0:
-                publish_data[predicate_type] = {}
-                k = map(lambda x: dict({x: [river_id]}), new_predicates)
-                for v in k:
-                    publish_data[predicate_type].update(v)
-            elif len(new_predicates) == 0:
-                # No new filter predicates, check for rivers update
-                # for each predicate
-                publish_data[predicate_type] = {}
-
-                for k, v in update_target.iteritems():
-                    # Get the rivers tied to the current set of predicates
-                    g = current_target[k]
-                    rivers_diff = list(set(v) - set(g))
-                    if len(rivers_diff) > 0:
-                        publish_data[predicate_type].update({k: rivers_diff})
-
-                # Verify that there's data to be published
-                if len(publish_data[predicate_type]) == 0:
-                    publish_data = {}
-
-        # Check if there's any data to be published
-        if len(publish_data) > 0:
+        if has_changed:
             with self.__lock:
-                self.predicates_changed = True
+                self._update_twitter_cache()
+                self._predicates_changed = True
 
-    def delete_filter_predicate(self, payload):
+    def delete_filter_predicate(self, parameters, river_id, channel_id):
         """ Removes a predicate from the internal cache and from
         firehose predicates list"""
+        has_changed = False
 
-        predicate_type = self._get_predicate_type(payload['key'])
-        filter_predicate = json.loads(payload['value'])['value']
-        river_id = payload['river_id']
+        for key, filter_predicate in parameters.iteritems():
+            predicate_type = self._get_predicate_type(key)
 
-        delete_items = {}
-        self._sanitize_filter_predicate(predicate_type, filter_predicate,
-                                         delete_items, river_id)
-        # Update the internal cache
-        self._update_twitter_cache()
+            delete_items = {}
+            self._sanitize_filter_predicate(predicate_type, filter_predicate,
+                                            delete_items, river_id,
+                                            channel_id)
 
-        # Get the current set of predicates from memory
-        current_predicates = self.predicates.get(predicate_type, dict())
+            # Get the current set of predicates from memory
+            current_predicates = self.predicates.get(predicate_type, dict())
 
-        # Nothing to delete
-        if len(current_predicates) == 0:
-            return
+            # Nothing to delete
+            if len(current_predicates) == 0:
+                continue
 
-        # Remove the deleted items from predicate internal registry
-        for k, v in delete_items.iteritems():
-            # Rivers currently using the predicate
-            rivers = map(lambda x: int(x), current_predicates.get(k, []))
+            # Remove the deleted items from predicate internal registry
+            for term, channels in delete_items.iteritems():
+                if not current_predicates.has_key(term):
+                    continue
 
-            # Rivers the predicate has been deleted from
-            deleted_rivers = map(lambda x: int(x), v)
+                for channel_id in channels.keys():
+                    del current_predicates[term][channel_id]
 
-            # Get the delta of the two sets of river ids
-            delta = list(set(rivers) - set(deleted_rivers))
+                # Any channels for the current term
+                if len(current_predicates.get(term)) == 0:
+                    del current_predicates[term]
 
-            if len(delta) == 0 and k in current_predicates:
-                # No rivers for that predicate, remove it
-                del current_predicates[k]
-            else:
-                current_predicates[k] = delta
+            self.predicates[predicate_type].update(current_predicates)
+            has_changed = True
 
-        log.info("Deleted filter predicate %s from river %s" %
-                 (filter_predicate, river_id))
-
-        self.predicates[predicate_type].update(current_predicates)
-        with self.__lock:
-            self.predicates_changed = True
+        if has_changed:
+            with self.__lock:
+                # Update the internal cache
+                self._update_twitter_cache()
+                self._predicates_changed = True
 
     def _get_predicate_type(self, payload_key):
         """ Given the payload key, returns the predicate type"""
@@ -199,7 +161,7 @@ class TwitterFirehoseManager(Daemon):
             return "track"
 
     def _sanitize_filter_predicate(self, predicate_type, filter_predicate,
-                                   update_target, river_id):
+                                   update_target, river_id, channel_id):
         """Given a filter predicate, splits it, removes '#' and '@'
         and pushes it to the specified target"""
 
@@ -219,77 +181,39 @@ class TwitterFirehoseManager(Daemon):
             if  term == False or len(term) > 60:
                 continue
 
+            # Store the river id against the respective channel
             if not term in update_target:
-                update_target[term] = set()
-            else:
-                L = set(update_target[term])
-                update_target[term] = L
+                update_target[term] = {channel_id: river_id}
 
-            # Store the river id with that item
-            update_target[term].add(river_id)
-
-    def _get_firehose_predicates(self):
+    def _get_twitter_predicates(self):
         """Gets all the twitter channel options and classifies them
         as track and follow predicates"""
 
         c = self.get_cursor()
         c.execute("""
-        SELECT river_id, `key`, `value`
-        FROM rivers r, channel_filters cf, channel_filter_options cfo
-        WHERE r.id = cf.river_id
-        AND cfo.channel_filter_id = cf.id
-        AND r.river_active = 1
-        AND cf.channel = 'twitter'
-        AND cfo.key = 'keyword'
-        AND cf.filter_enabled = 1
+        select rc.id AS channel_id, river_id, parameters
+        from rivers r, river_channels rc
+        where r.id = rc.river_id
+        and rc.channel = 'twitter'
+        and rc.active = 1
         """)
 
-        predicates = {}
-        for river_id, key, value in c.fetchall():
-            predicate_type = self._get_predicate_type(key)
-
-            if not predicate_type in predicates:
-                predicates[predicate_type] = {}
-
-            if utils.allow_filter_predicate(predicates, predicate_type):
-                update_target = predicates[predicate_type]
-
-                # Get filter predicate and submit it for sanitization
-                filter_predicate = json.loads(value)['value']
-                self._sanitize_filter_predicate(predicate_type,
-                                                filter_predicate,
-                                                update_target, river_id)
-
-                predicates[predicate_type] = update_target
-            else:
-                break
+        for channel_id, river_id, parameters in c.fetchall():
+            parameter_dict = json.loads(parameters)['value'];
+            log.info("%s" % parameters)
+            self.add_filter_predicate(parameter_dict, river_id, channel_id)
 
         c.close()
-
-        # Update the twitter cache only if the DB data is different
-        # from that in the cache
-        if 'follow' in predicates:
-            current = set(predicates['follow'].keys())
-            cache_data = set(self.twitter_user_ids.keys())
-            if (current - cache_data) is not None:
-                self._update_twitter_cache()
-
-        # Convert the sets to lists
-        for k, v in predicates.iteritems():
-            for term, river_ids in v.iteritems():
-                predicates[k][term] = list(river_ids)
-
-        return predicates
 
     def run_manager(self):
         # Options to be passed to the predicate update workers
         while True:
-            if self.predicates_changed:
+            if self._predicates_changed:
                 log.info("Placing filter predicates in the firehose queue %r"
                          % self.predicates)
                 self.firehose_publisher.publish(self.predicates)
                 with self.__lock:
-                    self.predicates_changed = False
+                    self._predicates_changed = False
             time.sleep(8)
 
     def run(self):
@@ -317,8 +241,9 @@ class TwitterFirehoseManager(Daemon):
                 self)
 
         # Get all the predicates from the database
-        self.predicates = self._get_firehose_predicates()
-        self.predicates_changed = (len(self.predicates) > 0)
+        self._get_twitter_predicates()
+        log.info("%r" % self.predicates)
+        self._predicates_changed = (len(self.predicates) > 0)
 
         self.run_manager()
 
@@ -384,18 +309,25 @@ class TwitterPredicateUpdateWorker(Worker):
         try:
             method, properties, body = self.job_queue.get(True)
             message = json.loads(body)
-            # Add predicates
-            if method.routing_key == "web.channel_option.twitter.add":
-                log.info("Add new twitter predicate...")
-                self.manager.add_filter_predicate(message)
+            routing_key = method.routing_key
 
-            # Delete predicates
-            if method.routing_key == "web.channel_option.twitter.delete":
-                log.info("Deleting twitter predicate...")
+            # Check for messages updates to the twitter predicates
+            if re.search("^web.channel", routing_key, re.I):
+                if message['channel'] == 'twitter':
+                    channel_id = int(message['id'])
+                    river_id = int(message['river_id'])
+                    parameters = json.loads(message['parameters'])['value']
 
-                self.manager.delete_filter_predicate(message)
+                    # Check for operation to be performed - add/delete
+                    if routing_key == "web.channel.twitter.add":
+                        log.info("Adding channel %d" % channel_id)
+                        self.manager.add_filter_predicate(parameters,
+                            river_id, channel_id)
+                    elif routing_key == "web.channel.twitter.delete":
+                        self.manager.delete_filter_predicate(parameters,
+                            river_id, channel_id)
 
-            self.confirm_queue.put(method.delivery_tag, False)
+                    self.confirm_queue.put(method.delivery_tag, False)
         except Exception, e:
             log.info(e)
             log.exception(e)
