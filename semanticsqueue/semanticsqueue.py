@@ -89,9 +89,9 @@ class SemanticsQueueWorker(Worker):
 
             # Flag to determine whether or not to retry
             # submitting the drop for semantic extraction
-            retry_submit = False
+            retry_submit = True
 
-            while not resp:
+            while retry_submit:
                 try:
                     resp, content = self.h.request(self.api_url, 'POST',
                                                    body=urlencode(post_data),
@@ -114,20 +114,16 @@ class SemanticsQueueWorker(Worker):
                         # Increment the retry counter
                         self.retry_cache[cache_id] += 1
 
-                        if self.retry_cache[cache_id] <= self.max_retries:
-                            retry_submit = True
-                        else:
+                        if self.retry_cache[cache_id] > self.max_retries:
                             # Drop has exceeded maximum number of retries
-                            # so purge from retry cache
+                            # so purge from retry cache and disable retry
                             del self.retry_cache[cache_id]
                             retry_submit = False
-                        
+                            log.info("Exceeded retry count for drop %s." %
+                                     cache_id)
+
                         # Release the lock
                         self.lock.release()
-                        
-                        # If maximum retries have been exhausted, break
-                        if not retry_submit:
-                            break
                 except socket.error, msg:
                     log.error(
                         "%s Error communicating with api(%s). Retrying" %
