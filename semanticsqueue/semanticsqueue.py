@@ -97,12 +97,17 @@ class SemanticsQueueWorker(Worker):
                                                    body=urlencode(post_data),
                                                    headers=headers)
 
-                    log.error(
-                        "%s NOK response from the API (%d). Retrying" %
-                        (self.name, resp.status))
+                    # Check for the status code
+                    if resp.status == 200:
+                        # Do not retry
+                        retry_submit = False
+                    else:
+                        log.error(
+                            "%s NOK response from the API (%d). Retrying" %
+                            (self.name, resp.status))
 
-                    # If no OK response, keep retrying
-                    if resp.status != 200:
+                        # NOK response received, retry until successful or till
+                        # the maximum no. of retries has been exceeded
                         resp = content = None
 
                         # Acquire shared lock
@@ -113,6 +118,10 @@ class SemanticsQueueWorker(Worker):
 
                         # Increment the retry counter
                         self.retry_cache[cache_id] += 1
+                        
+                        # Log the current retry count for the drop
+                        log.info("Retry no. %d for drop %s" % 
+                                 (self.retry_cache[cache_id], cache_id))
 
                         if self.retry_cache[cache_id] > self.max_retries:
                             # Drop has exceeded maximum number of retries
@@ -124,8 +133,6 @@ class SemanticsQueueWorker(Worker):
 
                         # Release the lock
                         self.lock.release()
-                    else:
-                        retry_submit = False
                 except socket.error, msg:
                     log.error(
                         "%s Error communicating with api(%s). Retrying" %
@@ -194,7 +201,7 @@ class SemanticsQueueDaemon(Daemon):
         self.api_url = api_url
         self.mq_host = mq_host
         self.lock = Lock()
-        self.max_retries = max_retries
+        self.max_retries = int(max_retries)
         self.sleep_time = sleep_time
         self.retry_cache = {}
 
