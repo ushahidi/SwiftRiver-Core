@@ -124,6 +124,8 @@ class SemanticsQueueWorker(Worker):
 
                         # Release the lock
                         self.lock.release()
+                    else:
+                        retry_submit = False
                 except socket.error, msg:
                     log.error(
                         "%s Error communicating with api(%s). Retrying" %
