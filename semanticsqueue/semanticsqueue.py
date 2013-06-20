@@ -97,6 +97,10 @@ class SemanticsQueueWorker(Worker):
                                                    body=urlencode(post_data),
                                                    headers=headers)
 
+                    log.error(
+                        "%s NOK response from the API (%d). Retrying" %
+                        (self.name, resp.status))
+
                     # If no OK response, keep retrying
                     if resp.status != 200:
                         resp = content = None
@@ -111,9 +115,6 @@ class SemanticsQueueWorker(Worker):
                         self.retry_cache[cache_id] += 1
 
                         if self.retry_cache[cache_id] <= self.max_retries:
-                            log.error(
-                                "%s NOK response from the API (%d), retrying" %
-                                (self.name, resp.status))
                             retry_submit = True
                         else:
                             # Drop has exceeded maximum number of retries
