@@ -6,3 +6,5 @@ num_workers=10
 log_level=DEBUG
 api_url=http://semantics.api.ushahididev.com/entities.json
 mq_host=localhost
+sleep_time=30
+max_retries=5

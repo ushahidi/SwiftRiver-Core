@@ -14,10 +14,11 @@ import ConfigParser
 import socket
 import logging as log
 import json
+import random
 import re
 import time
 from urllib import urlencode
-from threading import Thread
+from threading import Thread, Lock
 from os.path import dirname, realpath
 
 from httplib2 import Http
@@ -28,10 +29,16 @@ from swiftriver import Worker, Consumer, Daemon, Publisher
 class SemanticsQueueWorker(Worker):
 
     def __init__(self, name, job_queue, confirm_queue, api_url,
-                 drop_publisher):
+                 drop_publisher, lock, max_retries, sleep_time,
+                 retry_cache):
         self.api_url = api_url
         self.h = Http()
         self.drop_publisher = drop_publisher
+        self.lock = lock
+        self.max_retries = max_retries
+        self.sleep_time = sleep_time
+        self.retry_cache = retry_cache
+
         Worker.__init__(self, name, job_queue, confirm_queue)
 
     def work(self):
@@ -76,6 +83,13 @@ class SemanticsQueueWorker(Worker):
             headers = {'Content-type': 'application/x-www-form-urlencoded'}
 
             resp = content = None
+            
+            # Unique ID used to store the drop in the retry cache
+            cache_id = properties.correlation_id
+
+            # Flag to determine whether or not to retry
+            # submitting the drop for semantic extraction
+            retry_submit = False
 
             while not resp:
                 try:
@@ -85,16 +99,39 @@ class SemanticsQueueWorker(Worker):
 
                     # If no OK response, keep retrying
                     if resp.status != 200:
-                        log.error(
-                            "%s NOK response from the API (%d), retrying." %
-                            (self.name, resp.status))
                         resp = content = None
-                        time.sleep(60)
+
+                        # Acquire shared lock
+                        self.lock.acquire()
+                        # Check if the drop is in the retry cache
+                        if not self.retry_cache.has_key(cache_id):
+                            self.retry_cache[cache_id] = 0
+
+                        # Increment the retry counter
+                        self.retry_cache[cache_id] += 1
+
+                        if self.retry_cache[cache_id] <= self.max_retries:
+                            log.error(
+                                "%s NOK response from the API (%d), retrying" %
+                                (self.name, resp.status))
+                            retry_submit = True
+                        else:
+                            # Drop has exceeded maximum number of retries
+                            # so purge from retry cache
+                            del self.retry_cache[cache_id]
+                            retry_submit = False
+                        
+                        # Release the lock
+                        self.lock.release()
+                        
+                        # If maximum retries have been exhausted, break
+                        if not retry_submit:
+                            break
                 except socket.error, msg:
                     log.error(
                         "%s Error communicating with api(%s). Retrying" %
                         (self.name, msg))
-                    time.sleep(60) #Retry after 60 seconds
+                        time.sleep(self.sleep_time)
 
             log.info('%s sematics API said %r' % (self.name, content))
             if content:
@@ -135,11 +172,12 @@ class SemanticsQueueWorker(Worker):
 
         # Publish the drop to it's reply_to queue
         self.drop_publisher.publish(droplet, 
-                                    callback=self.confirm_drop, 
+                                    callback=self.confirm_drop,
                                     corr_id=properties.correlation_id,
                                     routing_key=properties.reply_to)
 
-        log.info("%s finished processing in %fs" % (self.name, time.time()-start_time))
+        log.info("%s finished processing in %fs" 
+                 %(self.name, time.time()-start_time))
 
     def confirm_drop(self, drop):
         # Confirm delivery only once droplet has been passed
@@ -149,12 +187,17 @@ class SemanticsQueueWorker(Worker):
 
 class SemanticsQueueDaemon(Daemon):
 
-    def __init__(self, num_workers, mq_host, api_url, pid_file, out_file):
+    def __init__(self, num_workers, mq_host, api_url, 
+                 pid_file, out_file, sleep_time, max_retries):
         Daemon.__init__(self, pid_file, out_file, out_file, out_file)
 
         self.num_workers = num_workers
         self.api_url = api_url
         self.mq_host = mq_host
+        self.lock = Lock()
+        self.max_retries = max_retries
+        self.sleep_time = sleep_time
+        self.retry_cache = {}
 
     def run(self):
         # Parameters to be passed on to the queue worker
@@ -173,7 +216,9 @@ class SemanticsQueueDaemon(Daemon):
             SemanticsQueueWorker("semanticsqueue-worker-" + str(x),
                                  drop_consumer.message_queue,
                                  drop_consumer.confirm_queue,
-                                 self.api_url, drop_publisher)
+                                 self.api_url, drop_publisher,
+                                 self.lock, self.max_retries,
+                                 self.sleep_time, self.retry_cache)
 
         log.info("Workers started")
         drop_consumer.join()
@@ -194,6 +239,13 @@ if __name__ == "__main__":
         api_url = config.get("main", 'api_url')
         mq_host = config.get("main", 'mq_host')
 
+        # No. of seconds to sleep if an error is encountered
+        sleep_time = config.get("main", "sleep_time")
+
+        # Maximum no. of times to retry sending a request for semantic
+        # extraction
+        max_retries = config.get("main", "max_retries")
+
         FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
         log.basicConfig(filename=log_file,
                         level=getattr(log, log_level.upper()),
@@ -203,7 +255,8 @@ if __name__ == "__main__":
 
         # Create the daemon reference
         daemon = SemanticsQueueDaemon(num_workers, mq_host, api_url,
-                                      pid_file, out_file)
+                                      pid_file, out_file, sleep_time,
+                                      max_retries)
         if len(sys.argv) == 2:
             if 'start' == sys.argv[1]:
                 daemon.start()
