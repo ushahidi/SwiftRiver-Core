@@ -131,7 +131,7 @@ class SemanticsQueueWorker(Worker):
                     log.error(
                         "%s Error communicating with api(%s). Retrying" %
                         (self.name, msg))
-                        time.sleep(self.sleep_time)
+                    time.sleep(self.sleep_time)
 
             log.info('%s sematics API said %r' % (self.name, content))
             if content:
