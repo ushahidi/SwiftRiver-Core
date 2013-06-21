@@ -20,6 +20,7 @@ import ConfigParser
 import socket
 import random
 import re
+from hashlib import md5
 from threading import Thread, RLock
 from os.path import dirname, realpath
 
@@ -132,13 +133,18 @@ class RssFetchScheduler(Daemon):
         with self.lock:
             # Add urls missing in the local cache that exist in the
             # channel filters table
-            added_urls =  river_channel_urls - cached_urls
+            missing_urls =  river_channel_urls - cached_urls
+            added_urls = []
+            for url in missing_urls:
+                row = (url, md5(hash))
+                added_urls.append(added_urls)
+
             log.info("%d urls have been added." % len(added_urls))
-            log.debug(added_urls)
+            
             if len(added_urls):
                 c = self.get_cursor()
                 c.executemany(
-                    "insert into rss_urls (url) values (%s)", added_urls
+                    "insert into rss_urls (url, url_hash) values (%s)", added_urls
                 )
                 c.close()
                 self.db.commit()
@@ -154,15 +160,19 @@ class RssFetchScheduler(Daemon):
             # Remove rivers from the local cache that have been removed
             # from the channel filters table
             deleted_urls = cached_urls - river_channel_urls
-            log.info("%d urls have been deleted." % len(deleted_urls))
-            log.debug(deleted_urls)
+            deleted_url_hashes = set([md5(url) for url in deleted_urls])
+
             if len(deleted_urls):
+                log.info("%d urls have been deleted." % len(deleted_url_hashes))
+                log.debug(deleted_urls)
+
                 c = self.get_cursor()
                 c.executemany(
-                    "delete from rss_urls where url in (%s)", deleted_urls
-                )
+                    "delete from rss_urls where url_hash in (%s)",
+                    deleted_url_hashes)
                 c.close()
                 self.db.commit()
+
                 for url in deleted_urls:
                     del(self.rss_urls[url])
 
@@ -180,7 +190,8 @@ class RssFetchScheduler(Daemon):
         """
         log.info("Starting scheduler")
         while True:
-            # Get all non submitted urls that are due for a fetch based on the last_fetch time
+            # Get all non submitted urls that are due for a fetch based
+            # on the last_fetch time
             jobs = []
             with self.lock:
                 jobs = [{"url": url,

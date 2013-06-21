@@ -12,10 +12,11 @@ CREATE TABLE IF NOT EXISTS `rss_cache` (
 -- Create syntax for TABLE 'rss_urls'
 CREATE TABLE IF NOT EXISTS `rss_urls` (
   `id` int(11) unsigned NOT NULL AUTO_INCREMENT,
-  `url` varchar(255) NOT NULL DEFAULT '',
+  `url` varchar(350) NOT NULL DEFAULT '',
   `last_fetch_time` int(11) DEFAULT NULL,
   `last_fetch_etag` varchar(255) DEFAULT NULL,
   `last_fetch_modified` varchar(255) DEFAULT NULL,
+  `url_hash` char(32) NOT NULL,
   PRIMARY KEY (`id`),
-  UNIQUE KEY `url` (`url`)
+  UNIQUE KEY `idx_rss_url_hash` (`url_hash`)
 ) ENGINE=InnoDB AUTO_INCREMENT=535 DEFAULT CHARSET=utf8;
