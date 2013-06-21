@@ -136,7 +136,7 @@ class RssFetchScheduler(Daemon):
             missing_urls =  river_channel_urls - cached_urls
             added_urls = []
             for url in missing_urls:
-                row = (url, md5(hash))
+                row = (url, md5(url))
                 added_urls.append(added_urls)
 
             log.info("%d urls have been added." % len(added_urls))
