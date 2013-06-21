@@ -98,7 +98,7 @@ class SemanticsQueueWorker(Worker):
                                                    headers=headers)
 
                     # Check for the status code
-                    if resp.status == 200:
+                    if espr.status == 200:
                         # Do not retry
                         retry_submit = False
                     else:
@@ -202,7 +202,7 @@ class SemanticsQueueDaemon(Daemon):
         self.mq_host = mq_host
         self.lock = Lock()
         self.max_retries = int(max_retries)
-        self.sleep_time = sleep_time
+        self.sleep_time = int(sleep_time)
         self.retry_cache = {}
 
     def run(self):
