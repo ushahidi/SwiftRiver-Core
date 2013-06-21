@@ -92,7 +92,6 @@ class RssFetchScheduler(Daemon):
             urls[url]['channels'].add(int(channel_id))
 
         c.close()
-        log.debug("river_channel_urls fetched %r" % urls)
         return urls
 
     def get_rss_urls(self):
@@ -105,6 +104,7 @@ class RssFetchScheduler(Daemon):
         from rss_urls
         """)
 
+        log.info("Fetching cached urls")
         for url, last_fetch_time, last_fetch_etag, last_fetch_modified in c.fetchall():
             self.rss_urls[url] = {
                 'last_fetch_time': last_fetch_time or 0,
@@ -114,8 +114,8 @@ class RssFetchScheduler(Daemon):
                 'submitted': False
             }
 
+        log.info("Found %d urls in local cache" % len(self.rss_urls))
         c.close()
-        log.debug("rss_urls fetched %r" % self.rss_urls)
 
     def get_next_fetch_time(self, last_fetch_time):
         """Get a next fetch time with some added entropy to spread out
@@ -130,25 +130,29 @@ class RssFetchScheduler(Daemon):
         river_channels = self.get_river_channel_urls()
         river_channel_urls = set([url for url in river_channels])
 
+        log.info("Initializing local cache")
         with self.lock:
             # Add urls missing in the local cache that exist in the
             # channel filters table
             missing_urls =  river_channel_urls - cached_urls
             added_urls = []
             for url in missing_urls:
-                row = (url, md5(url))
-                added_urls.append(added_urls)
+                row = (url, md5(url).hexdigest())
+                added_urls.append(row)
 
             log.info("%d urls have been added." % len(added_urls))
             
             if len(added_urls):
                 c = self.get_cursor()
                 c.executemany(
-                    "insert into rss_urls (url, url_hash) values (%s)", added_urls
-                )
+                """INSERT INTO `rss_urls` (url, url_hash)
+                VALUES (%s, %s)""", added_urls)
                 c.close()
+                
+                # Commit the transaction
                 self.db.commit()
-                for url in added_urls:
+
+                for url in missing_urls:
                     self.rss_urls[url] = {
                         'last_fetch_time': 0,
                         'next_fetch_time': 0,
@@ -160,11 +164,10 @@ class RssFetchScheduler(Daemon):
             # Remove rivers from the local cache that have been removed
             # from the channel filters table
             deleted_urls = cached_urls - river_channel_urls
-            deleted_url_hashes = set([md5(url) for url in deleted_urls])
+            deleted_url_hashes = set([md5(url).hexdigest() for url in deleted_urls])
 
             if len(deleted_urls):
                 log.info("%d urls have been deleted." % len(deleted_url_hashes))
-                log.debug(deleted_urls)
 
                 c = self.get_cursor()
                 c.executemany(
