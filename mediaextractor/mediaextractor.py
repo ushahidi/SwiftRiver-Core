@@ -87,10 +87,11 @@ class MediaExtractorQueueWorker(Worker):
                     images.append(image)
                 elif link:
                     links.append(link)
-            
+
             if links:
-                droplet['links'] = links
-            
+                if not droplet.has_key('links'):
+                    droplet['links'] = links
+
             # Get a droplet_image and remove too small images
             droplet_image = None
             selected_images = []

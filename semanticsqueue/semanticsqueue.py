@@ -147,7 +147,8 @@ class SemanticsQueueWorker(Worker):
                     semantics = response['results']
 
                     if 'location' in semantics:
-                        droplet['places'] = []
+                        if not droplet.has_key('places'):
+                            droplet['places'] = []
                         for place in semantics['location']:
                             droplet['places'].append({
                                 'place_name': place['place_name'],
