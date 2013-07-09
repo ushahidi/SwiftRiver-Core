@@ -98,7 +98,7 @@ class SemanticsQueueWorker(Worker):
                                                    headers=headers)
 
                     # Check for the status code
-                    if espr.status == 200:
+                    if resp.status == 200:
                         # Do not retry
                         retry_submit = False
                     else:
