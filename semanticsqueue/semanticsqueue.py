@@ -89,7 +89,8 @@ class SemanticsQueueWorker(Worker):
 
             # Flag to determine whether or not to retry
             # submitting the drop for semantic extraction
-            retry_submit = True
+            retry_submit = not (droplet.has_key('semantics_complete') \
+                and droplet['semantics_complete'])
 
             while retry_submit:
                 try:
@@ -147,8 +148,7 @@ class SemanticsQueueWorker(Worker):
                     semantics = response['results']
 
                     if 'location' in semantics:
-                        if not droplet.has_key('places'):
-                            droplet['places'] = []
+                        droplet['places'] = []
                         for place in semantics['location']:
                             droplet['places'].append({
                                 'place_name': place['place_name'],
