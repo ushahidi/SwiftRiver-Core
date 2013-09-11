@@ -55,10 +55,10 @@ class SemanticsQueueWorker(Worker):
         if droplet_raw is not None:
             # UTF-8 encode the payload before submitting it to the
             # tagging API
-            droplet_raw = droplet_raw.strip().encode('utf-8', 'ignore')
+            # droplet_raw = droplet_raw.strip().encode('utf-8', 'ignore')
 
-            post_data = dict(text=droplet_raw)
-            headers = {'Content-type': 'application/x-www-form-urlencoded'}
+            post_data = {'text': droplet_raw}
+            headers = {'Content-Type': 'application/json'}
 
             resp = content = None
             
@@ -73,7 +73,7 @@ class SemanticsQueueWorker(Worker):
             while retry_submit:
                 try:
                     resp, content = self.h.request(self.api_url, 'POST',
-                                                   body=urlencode(post_data),
+                                                   body=json.dumps(post_data),
                                                    headers=headers)
 
                     # Check for the status code
