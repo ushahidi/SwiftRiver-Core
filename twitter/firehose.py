@@ -444,20 +444,29 @@ class FirehoseStreamListener(StreamListener):
                 retweet_match = re.findall('^(RT\:?)\s*', droplet_content,
                                            re.I)
                 if len(retweet_match) == 0:
+                    screen_name, status_id = payload['user']['screen_name'], \
+                        payload['id_str']
+
+                    # Permalink for the tweet
+                    tweet_url = "https://twitter.com/%s/statuses/%s" % \
+                        (screen_name, status_id)
+
+                    links = {'url': tweet_url, 'original_url': True}
                     drop = {
                         'channel': 'twitter',
                         'identity_orig_id': payload['user']['id_str'],
                         'in_reply_to_user_id': payload['in_reply_to_user_id_str'],
                         'identity_name': payload['user']['name'],
-                        'identity_username': payload['user']['screen_name'],
+                        'identity_username': screen_name,
                         'identity_avatar': payload['user']['profile_image_url'],
-                        'droplet_orig_id': payload['id_str'],
+                        'droplet_orig_id': status_id,
                         'droplet_type': 'original',
                         'droplet_title': droplet_content,
                         'droplet_content': droplet_content,
                         'droplet_raw': droplet_content,
                         'droplet_locale': payload['user']['lang'],
-                        'droplet_date_pub': droplet_date_pub}
+                        'droplet_date_pub': droplet_date_pub,
+                        'links': links}
                     self.drop_queue.put((time.time(), drop), False)
 
             elif 'delete' in payload:
