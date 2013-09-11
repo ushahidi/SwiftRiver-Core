@@ -15,7 +15,6 @@ import socket
 import logging as log
 import json
 import random
-import re
 import time
 from urllib import urlencode
 from threading import Thread, Lock
@@ -54,28 +53,7 @@ class SemanticsQueueWorker(Worker):
         droplet_raw = droplet['droplet_raw']
 
         if droplet_raw is not None:
-            # nltk.clean_html() implementation
-            # Credits: NLTK Team - <http://www.nltk.org>
-
-            # Remove inline Javascript and CSS
-            droplet_raw = re.sub(
-                r"(?is)<(script|style).*?>.*?(</\1)",
-                "",
-                droplet_raw.strip())
-
-            # Remove HTML comments. Do this before removing HTML tags because
-            # comments can contain '>' characters
-            droplet_raw = re.sub(r"(?s)<!--(.*?)-->[\n]?", "", droplet_raw)
-
-            # Remove the remaining HTML tags
-            droplet_raw = re.sub(r"(?s)<.*?>", " ", droplet_raw)
-
-            # Whitespace removal
-            droplet_raw = re.sub(r"&nbsp;", " ", droplet_raw)
-            droplet_raw = re.sub(r"   ", " ", droplet_raw)
-            droplet_raw = re.sub(r"   ", " ", droplet_raw)
-
-            # Finally, UTF-8 encode the payload before submitting it to the
+            # UTF-8 encode the payload before submitting it to the
             # tagging API
             droplet_raw = droplet_raw.strip().encode('utf-8', 'ignore')
 
@@ -144,31 +122,28 @@ class SemanticsQueueWorker(Worker):
             if content:
                 response = json.loads(content)
 
-                if response.get('status') == 'OK':
-                    semantics = response['results']
+                if 'places' in response:
+                    droplet['places'] = []
+                    for place in response['places']:
+                        droplet['places'].append({
+                            'place_name': place['place_name'],
+                            'latitude': place['latitude'],
+                            'longitude': place['longitude'],
+                            'place_type': place['place_type'],
+                            'source': 'gisgraphy'})
 
-                    if 'location' in semantics:
-                        droplet['places'] = []
-                        for place in semantics['location']:
-                            droplet['places'].append({
-                                'place_name': place['place_name'],
-                                'latitude': place['coordinates']['latitude'],
-                                'longitude': place['coordinates']['longitude'],
-                                'source': 'gisgraphy'})
+                    # Remove gpe items and return the rest as tags
+                    del response['places']
 
-                        # Remove gpe items and return the rest as tags
-                        del(semantics['location'])
+                droplet['tags'] = []
+                for k, v in response.iteritems():
+                    for tag in v:
+                        entry = {'tag_type': k, 'tag_name': tag}
+                        droplet['tags'].append(entry)
 
-                    droplet['tags'] = []
-                    for k, v in semantics.iteritems():
-                        for tag in semantics[k]:
-                            droplet['tags'].append({
-                                'tag_name': tag,
-                                'tag_type': k})
-
-                    log.debug('%s droplet meta = %r, %r' %
-                              (self.name, droplet.get('tags'),
-                               droplet.get('places')))
+                log.debug('%s droplet meta = %r, %r' %
+                          (self.name, droplet.get('tags'),
+                           droplet.get('places')))
 
         # Send back the updated droplet to the droplet queue for updating
         droplet['semantics_complete'] = True
