@@ -126,7 +126,7 @@ class SemanticsQueueWorker(Worker):
                     droplet['places'] = []
                     for place in response['places']:
                         droplet['places'].append({
-                            'place_name': place['place_name'],
+                            'place_name': place['name'],
                             'latitude': place['latitude'],
                             'longitude': place['longitude'],
                             'place_type': place['place_type'],
