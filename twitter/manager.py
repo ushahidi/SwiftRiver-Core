@@ -196,6 +196,7 @@ class TwitterFirehoseManager(Daemon):
         where r.id = rc.river_id
         and rc.channel = 'twitter'
         and rc.active = 1
+        and r.river_active = 1
         """)
 
         for channel_id, river_id, parameters in c.fetchall():
