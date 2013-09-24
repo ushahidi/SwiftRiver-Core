@@ -451,7 +451,7 @@ class FirehoseStreamListener(StreamListener):
                     tweet_url = "https://twitter.com/%s/statuses/%s" % \
                         (screen_name, status_id)
 
-                    links = {'url': tweet_url, 'original_url': True}
+                    links = [{'url': tweet_url, 'original_url': True}]
                     drop = {
                         'channel': 'twitter',
                         'identity_orig_id': payload['user']['id_str'],
